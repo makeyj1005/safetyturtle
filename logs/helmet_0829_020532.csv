@@ -1,0 +1,18 @@
+time,verdict,persons,helmet_ratio,conf,box,head,detector,held,image
+2026-08-29 02:05:51,미착용,1,0.000,0.99,135-88-632-476,box,dnn,,/root/vibe/ex1/logs/helmet_0829_020532/020551_bad.jpg
+2026-08-29 02:06:58,미착용,2,0.000,0.97,0-84-165-480,box,dnn,,/root/vibe/ex1/logs/helmet_0829_020532/020658_bad.jpg
+2026-08-29 02:08:31,미착용,1,0.000,0.91,350-112-634-480,box,dnn,Y,/root/vibe/ex1/logs/helmet_0829_020532/020831_bad.jpg
+2026-08-29 02:09:24,미착용,1,0.000,0.94,191-7-637-476,box,dnn,,/root/vibe/ex1/logs/helmet_0829_020532/020924_bad.jpg
+2026-08-29 02:09:46,미착용,1,0.000,0.85,170-158-468-480,box,dnn,Y,/root/vibe/ex1/logs/helmet_0829_020532/020946_bad.jpg
+2026-08-29 02:10:58,미착용,1,0.000,0.68,336-8-640-480,box,dnn,Y,/root/vibe/ex1/logs/helmet_0829_020532/021058_bad.jpg
+2026-08-29 02:11:12,미착용,1,0.000,0.60,358-23-640-474,box,dnn,Y,/root/vibe/ex1/logs/helmet_0829_020532/021112_bad.jpg
+2026-08-29 02:11:16,미착용,2,0.000,0.59,95-16-627-478,box,dnn,Y,/root/vibe/ex1/logs/helmet_0829_020532/021116_bad.jpg
+2026-08-29 02:11:27,미착용,1,0.000,0.65,356-29-640-478,box,dnn,Y,/root/vibe/ex1/logs/helmet_0829_020532/021127_bad.jpg
+2026-08-29 02:11:35,미착용,1,0.000,0.97,314-19-640-480,box,dnn,Y,/root/vibe/ex1/logs/helmet_0829_020532/021135_bad.jpg
+2026-08-29 02:12:10,미착용,1,0.000,0.95,307-92-638-480,box,dnn,Y,/root/vibe/ex1/logs/helmet_0829_020532/021210_bad.jpg
+2026-08-29 02:12:18,미착용,1,0.000,0.94,312-8-639-480,box,dnn,Y,/root/vibe/ex1/logs/helmet_0829_020532/021218_bad.jpg
+2026-08-29 02:12:21,미착용,1,0.000,0.68,179-11-637-480,box,dnn,Y,/root/vibe/ex1/logs/helmet_0829_020532/021221_bad.jpg
+2026-08-29 02:12:27,미착용,1,0.000,0.78,288-8-640-480,box,dnn,Y,/root/vibe/ex1/logs/helmet_0829_020532/021227_bad.jpg
+2026-08-29 02:12:30,미착용,1,0.000,0.51,151-15-633-480,box,dnn,Y,/root/vibe/ex1/logs/helmet_0829_020532/021230_bad.jpg
+2026-08-29 02:13:10,미착용,1,0.000,0.97,153-19-640-479,box,dnn,Y,/root/vibe/ex1/logs/helmet_0829_020532/021310_bad.jpg
+2026-08-29 02:13:28,미착용,1,0.000,0.97,226-7-638-477,box,dnn,Y,/root/vibe/ex1/logs/helmet_0829_020532/021328_bad.jpg

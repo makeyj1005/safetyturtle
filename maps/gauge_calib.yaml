@@ -1,0 +1,27 @@
+points:
+  FE-01:
+    roi:
+    - 805
+    - 202
+    - 132
+    - 132
+    radius_px: 39.4
+    normal_angle: 0.0
+    resolution:
+    - 1640
+    - 1232
+    ref_image: shot_112513_f01.jpg
+    ref_contrast: 105.0
+  소화기1:
+    roi:
+    - 596
+    - 205
+    - 140
+    - 140
+    radius_px: 40.4
+    normal_angle: 155.0
+    resolution:
+    - 1640
+    - 1232
+    ref_image: rc2_f00.jpg
+    ref_contrast: 104.3

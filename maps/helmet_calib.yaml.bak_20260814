@@ -1,0 +1,20 @@
+helmets:
+  초록테이프:
+    hsv:
+    - - 69
+      - 7
+      - 114
+      - 88
+      - 145
+      - 255
+    achromatic: false
+    cover: 0.961
+    roi:
+    - 197
+    - 85
+    - 35
+    - 11
+    resolution:
+    - 640
+    - 480
+    ref_image: /home/ohinseop/vibe/ex1/logs/helmet_calib/on0803_000623_04.jpg

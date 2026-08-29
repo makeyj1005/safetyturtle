@@ -1,0 +1,382 @@
+amcl:
+  ros__parameters:
+    use_sim_time: False
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+    base_frame_id: "base_footprint"
+    beam_skip_distance: 0.5
+    beam_skip_error_threshold: 0.9
+    beam_skip_threshold: 0.3
+    do_beamskip: false
+    global_frame_id: "map"
+    lambda_short: 0.1
+    laser_likelihood_max_dist: 2.0
+    laser_max_range: 100.0
+    laser_min_range: -1.0
+    laser_model_type: "likelihood_field"
+    max_beams: 60
+    max_particles: 2000
+    min_particles: 500
+    odom_frame_id: "odom"
+    pf_err: 0.05
+    pf_z: 0.99
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    resample_interval: 1
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    save_pose_rate: 0.5
+    sigma_hit: 0.2
+    tf_broadcast: true
+    transform_tolerance: 1.0
+    # 2026-08-07: 0.2 / 0.25 (기본값) 에서 낮췄다. 기본값은 "25cm 이동 또는 11.5도
+    # 회전할 때마다 한 번 보정"이라는 뜻인데, 이 방은 순찰 사각형이 1.15m x 0.95m 라
+    # 웨이포인트 사이 이동이 95cm 면 보정 기회가 3~4번뿐이고, 20cm 대 목표에서는 0번이다.
+    # 보정을 못 하면 틀린 위치를 그대로 믿고 달려서 엉뚱한 곳으로 간다(실측: 중앙을
+    # 찍었는데 오른쪽 벽으로 감, AMCL 방향이 -103도 -> +68도 로 도약).
+    update_min_a: 0.05    # 0.2 -> 0.05 (약 2.9도마다 보정)
+    update_min_d: 0.05    # 0.25 -> 0.05 (5cm 마다 보정)
+    z_hit: 0.5
+    z_max: 0.05
+    z_rand: 0.5
+    z_short: 0.05
+    scan_topic: scan
+
+amcl_map_client:
+  ros__parameters:
+    use_sim_time: False
+
+amcl_rclcpp_node:
+  ros__parameters:
+    use_sim_time: False
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: False
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /odom
+    default_bt_xml_filename: "navigate_w_replanning_and_recovery.xml"
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    enable_groot_monitoring: True
+    groot_zmq_publisher_port: 1666
+    groot_zmq_server_port: 1667
+    plugin_lib_names:
+    - nav2_compute_path_to_pose_action_bt_node
+    - nav2_compute_path_through_poses_action_bt_node
+    - nav2_follow_path_action_bt_node
+    - nav2_back_up_action_bt_node
+    - nav2_spin_action_bt_node
+    - nav2_wait_action_bt_node
+    - nav2_clear_costmap_service_bt_node
+    - nav2_is_stuck_condition_bt_node
+    - nav2_goal_reached_condition_bt_node
+    - nav2_goal_updated_condition_bt_node
+    - nav2_initial_pose_received_condition_bt_node
+    - nav2_reinitialize_global_localization_service_bt_node
+    - nav2_rate_controller_bt_node
+    - nav2_distance_controller_bt_node
+    - nav2_speed_controller_bt_node
+    - nav2_truncate_path_action_bt_node
+    - nav2_goal_updater_node_bt_node
+    - nav2_recovery_node_bt_node
+    - nav2_pipeline_sequence_bt_node
+    - nav2_round_robin_node_bt_node
+    - nav2_transform_available_condition_bt_node
+    - nav2_time_expired_condition_bt_node
+    - nav2_distance_traveled_condition_bt_node
+    - nav2_single_trigger_bt_node
+    - nav2_is_battery_low_condition_bt_node
+    - nav2_navigate_through_poses_action_bt_node
+    - nav2_navigate_to_pose_action_bt_node
+    - nav2_remove_passed_goals_action_bt_node
+    - nav2_planner_selector_bt_node
+    - nav2_controller_selector_bt_node
+    - nav2_goal_checker_selector_bt_node
+
+bt_navigator_rclcpp_node:
+  ros__parameters:
+    use_sim_time: False
+
+controller_server:
+  ros__parameters:
+    use_sim_time: False
+    controller_frequency: 10.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    # Progress checker parameters
+    # 2026-08-07: 0.5 / 10.0 (기본값) 에서 완화했다. 기본값은 이 방에서 구조적으로
+    # 만족될 수 없다 — "10초 안에 0.5m 이상 움직여야 정상"인데
+    #   순찰 사각형이 1.15m x 0.95m 이고 max_vel_x 를 0.10 으로 낮췄으므로(안전모 판정용)
+    #   10초에 갈 수 있는 최대가 1.0m 이고, stop_at_corners 로 코너마다 멈춰 도니
+    #   실제 전진 거리는 그보다 훨씬 짧다. 목표 간 거리가 20cm 대면 0.5m 는 불가능하다.
+    # 실측 로그: 0.21m 목표에서 `Failed to make progress` -> follow_path Aborting.
+    # 예전에는 이 오류를 무선 지연 탓으로 분류했는데(wireless-is-the-bottleneck),
+    # Nav2 를 로봇 온보드로 옮겨 무선을 제거하자 이 값이 진짜 원인으로 드러났다.
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      # 2026-08-07 2차: 20.0 으로도 순찰 1바퀴에서 4회 발동했다(전부 첫 구간).
+      # SimpleProgressChecker 는 **이동 거리만 세고 제자리 회전은 세지 않는다.**
+      # 좁은 코너에서 팽창 영역에 걸려 미세조정하는 동안은 이동이 0 이라 계속 걸린다.
+      # 40.0 으로 더 늘렸다 — 다만 이건 감지를 늦추는 완화책이고 근본 해결은 아니다
+      # (진짜로 끼었을 때 발견이 40초로 늦어진다). 상세는 nav2-tuning-for-tiny-room.
+      required_movement_radius: 0.10   # 0.5 -> 0.10 : 방 크기와 목표 간 거리에 맞춤
+      movement_time_allowance: 40.0    # 10.0 -> 20.0 -> 40.0 : 코너 회전·미세조정 시간
+
+    general_goal_checker:
+      stateful: True
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.10  # 0.25->0.10 : 웨이포인트 간격 0.5m 의 절반이라 지점을 대충 지났다
+      # 0.25->0.20->0.05 : 0.20(11.5도)이면 소화기 점검에서 게이지가 ROI 밖으로 나간다.
+      # 2026-08-01 실측 — 목표 yaw -81도에 -91도로 멈췄고(오차 10도, 허용치 안이라
+      # Nav2 는 성공 처리), 38cm 거리에서 화면 260px 이 밀려 게이지를 놓쳤다.
+      # 0.05 = 2.9도 -> 같은 거리에서 75px. 게이지 지름 79px 이니 ROI 안에 든다.
+      # 대가: 목표마다 자세를 맞추는 회전이 늘어 조금 느려진다. 순찰에도 함께 적용된다.
+      yaw_goal_tolerance: 0.05
+
+    # DWB parameters
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: True
+      min_vel_x: 0.0
+      min_vel_y: 0.0
+      # 0.22->0.15(벽까지 여유 20cm)->0.10 : 안전모 판정을 위해 더 낮췄다.
+      # 2026-08-02 사용자 결정 — 천천히 가면 흔들림·모션블러가 줄어 사람·안전모
+      # 판정이 쉬워진다. 순찰 영역이 1.15m x 0.95m 로 작아 시간 손실도 작다.
+      # 2026-08-07: 0.10 -> 0.15 로 올렸다. 근거는 "판정이 빨라져서"가 **아니다** —
+      # Pi 4 온보드 추론은 실측 405ms/장(2.5fps)로 VM 보다 오히려 느릴 수 있다.
+      # 올린 이유는 progress_checker 다: 0.10m/s 에서는 회전 시간을 빼면 정해진
+      # 시간 안에 요구 이동량을 못 채워 `Failed to make progress` 가 반복됐다.
+      # ⚠️ 이 값은 **안전모 판정을 켜고 재측정한 뒤 최종 확정**해야 한다.
+      # 0.10 은 2026-08-02 에 실측으로 정한 값이므로 근거 없이 폐기하지 않는다.
+      max_vel_x: 0.15
+      max_vel_y: 0.0
+      max_vel_theta: 1.0
+      min_speed_xy: 0.0
+      max_speed_xy: 0.15  # max_vel_x 와 같이 맞춘다
+      min_speed_theta: 0.0
+      # Add high threshold velocity for turtlebot 3 issue.
+      # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
+      acc_lim_x: 2.5
+      acc_lim_y: 0.0
+      acc_lim_theta: 3.2
+      decel_lim_x: -2.5
+      decel_lim_y: 0.0
+      decel_lim_theta: -3.2
+      vx_samples: 20
+      vy_samples: 0
+      vtheta_samples: 40
+      sim_time: 1.0  # 1.5->1.0 : 좁은 코너를 조여서 돌도록 (앞을 덜 내다본다)
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 0.2
+      xy_goal_tolerance: 0.05
+      trans_stopped_velocity: 0.25
+      short_circuit_trajectory_evaluation: True
+      stateful: True
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 0.02
+      PathAlign.scale: 32.0
+      PathAlign.forward_point_distance: 0.1
+      GoalAlign.scale: 24.0
+      GoalAlign.forward_point_distance: 0.1
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
+
+controller_server_rclcpp_node:
+  ros__parameters:
+    use_sim_time: False
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_link
+      use_sim_time: False
+      rolling_window: true
+      width: 3
+      height: 3
+      resolution: 0.05
+      robot_radius: 0.1
+      plugins: ["obstacle_layer", "voxel_layer", "inflation_layer"]
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 0.25  # 1.0->0.25 : 벽 30cm 경로가 고비용 구역 안이라 경로가 곡선이 됐다
+        cost_scaling_factor: 3.0
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: True
+        publish_voxel_map: True
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        max_obstacle_height: 2.0
+        mark_threshold: 0
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
+      static_layer:
+        map_subscribe_transient_local: True
+      always_send_full_costmap: True
+  local_costmap_client:
+    ros__parameters:
+      use_sim_time: False
+  local_costmap_rclcpp_node:
+    ros__parameters:
+      use_sim_time: False
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      use_sim_time: False  # True->False : 실제 로봇이므로 (원본 오류)
+      robot_radius: 0.1
+      resolution: 0.05
+      track_unknown_space: true
+      plugins: ["static_layer", "obstacle_layer", "voxel_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: True
+        publish_voxel_map: True
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        max_obstacle_height: 2.0
+        mark_threshold: 0
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.25  # 0.55->0.25 : 위와 동일
+      always_send_full_costmap: True
+  global_costmap_client:
+    ros__parameters:
+      use_sim_time: False
+  global_costmap_rclcpp_node:
+    ros__parameters:
+      use_sim_time: False
+
+map_server:
+  ros__parameters:
+    use_sim_time: False
+    yaml_filename: "map.yaml"
+
+map_saver:
+  ros__parameters:
+    use_sim_time: False
+    save_map_timeout: 5.0
+    free_thresh_default: 0.25
+    occupied_thresh_default: 0.65
+    map_subscribe_transient_local: True
+
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 20.0
+    use_sim_time: False
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true
+
+planner_server_rclcpp_node:
+  ros__parameters:
+    use_sim_time: False
+
+recoveries_server:
+  ros__parameters:
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    recovery_plugins: ["spin", "backup", "wait"]
+    spin:
+      plugin: "nav2_recoveries/Spin"
+    backup:
+      plugin: "nav2_recoveries/BackUp"
+    wait:
+      plugin: "nav2_recoveries/Wait"
+    global_frame: odom
+    robot_base_frame: base_link
+    transform_timeout: 0.1
+    use_sim_time: true
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+robot_state_publisher:
+  ros__parameters:
+    use_sim_time: False
+
+waypoint_follower:
+  ros__parameters:
+    loop_rate: 2000
+    stop_on_failure: false
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: True
+      waypoint_pause_duration: 200

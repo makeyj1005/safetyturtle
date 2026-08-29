@@ -1,0 +1,8 @@
+# 대안 자세 B — 2026-08-01 실제 도착 자세 (정상 판정, 정합 0.87, dx -68px)
+# A(기본 파일, -88.0°)로 정합이 0.9 에 못 미치면 이걸로 바꿔 시험한다.
+#   cp maps/fire_extinguisher_points_b.yaml maps/fire_extinguisher_points.yaml
+waypoints:
+- name: 소화기1
+  x: 1.142
+  y: -0.576
+  yaw: -1.5568

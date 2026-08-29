@@ -1,0 +1,18 @@
+- [로봇 호스트 정체](robot-host-identity.md) — SBC=카메라=한 대(ros18, 2026-08-07부터 Pi 4). MAC이 88:a2:9e 로 바뀜, 옛 b8:27:eb 검색법 폐기
+- [이동은 Nav2 좌표 이동](nav2-not-line-following.md) — 라인 추종은 제거됨. 카메라 한 대로 바닥+정면이 불가능한 이유
+- [명령어는 실행 위치까지](commands-need-location-and-context.md) — VM/라즈베리파이 구분 + 선행 명령까지 묶어서 줄 것
+- [작업 시작 전 어느 파트인지 설명](explain-scope-before-starting.md) — 전체 흐름에서 지금 위치를 먼저 찍고 시작할 것
+- [순찰 진행 상황](patrol-progress-nav2.md) — 순찰+점검+안전모 1차 완성 기록. 지금 할 일은 아래 pi4-upgrade-plan 참고
+- [라즈베리파이4 업그레이드 계획](pi4-upgrade-plan.md) — **다음 세션은 여기부터 읽을 것.** VM=화면만 목표구조와 남은 확장기능 5개
+- [Pi4 새 SD 클린설치 기록](pi4-sd-install-record.md) — 2026-08-07 완료. 카드리더기 없이 USB부팅으로 우회한 방법 + 함정 7가지
+- [안전모 색테이프 최종 해법](helmet-detection-color-tape-solution.md) — 8가지 실패 후 초록테이프+위쪽돔. 판정 흐름·수치 전부
+- [좁은 방 Nav2 튜닝](nav2-tuning-for-tiny-room.md) — **목표에 못 가면 여기부터.** progress_checker·update_min 기본값이 1.15m 방에선 불가능한 조건
+- [Nav2 파라미터 버전 불일치](nav2-param-version-mismatch.md) — Navigation inactive의 원인. humble/burger.yaml을 써야 함
+- [시험 노드를 남기지 말 것](dont-leave-stray-ros-nodes.md) — ros2 run 은 껍데기만 죽는다. pkill -f 는 자기 셸도 죽인다
+- [ROS_DOMAIN_ID 는 3 고정](ros-domain-id-3-fixed.md) — 시험용으로도 다른 도메인 금지. 실제 시스템이 돌 때는 시험을 미룰 것
+- [RMW는 fastrtps로 통일](ros2-rmw-fastrtps-decision.md) — cyclonedds 설정 폐기, 통신 장애 시 첫 확인 지점
+- [무선이 병목이다](wireless-is-the-bottleneck.md) — **절전 모드가 진짜 원인이었고 2026-08-07 해결됨.** 100ms 구멍 33회→0회
+- [2.4 vs 5GHz 비교 계획](wifi-24-vs-5ghz-plan.md) — 둘 다 준비됨, 전환 1분. 안전모 구현 후 실부하로 비교하기로 미룸
+- [카메라 스트림 설정 근거](csi-camera-stream-tuning.md) — 640x480/15fps/jpeg50, best_effort가 결정적이었던 이유
+- [모터가 안 돌 때](motor-torque-troubleshooting.md) — torque 확인이 1순위. 주행 중 드라이버 사망 시 안전 경고 포함
+- [로봇 저전압 이력](robot-undervoltage-warning.md) — 성능 이상 시 소프트웨어만 의심하지 말 것

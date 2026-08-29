@@ -1,0 +1,17 @@
+waypoints:
+- name: wp0
+  x: 0.016
+  y: -0.133
+  yaw: 0.2113
+- name: wp1
+  x: 0.496
+  y: -0.075
+  yaw: -0.2655
+- name: wp2
+  x: 1.1
+  y: 0.023
+  yaw: 0.123
+- name: wp3
+  x: 1.566
+  y: -0.175
+  yaw: -2.3894
