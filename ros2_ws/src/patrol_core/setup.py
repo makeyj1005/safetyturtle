@@ -30,6 +30,7 @@ setup(
             "helmet_node = patrol_core.helmet_node:main",
             "fire_node = patrol_core.fire_node:main",
             "restricted_node = patrol_core.restricted_node:main",
+            "extinguisher_expiry_node = patrol_core.extinguisher_expiry_node:main",
         ],
     },
 )

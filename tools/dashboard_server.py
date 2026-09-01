@@ -221,6 +221,7 @@ function stopMove() {
 }
 
 const KEYMAP = {
+  // 표준 ROS 관례(+x = 전진). Nav2 자율주행에서 실측 검증된 방향과 같다.
   'ArrowUp': [0.10, 0, 'kf'], 'w': [0.10, 0, 'kf'], 'W': [0.10, 0, 'kf'],
   'ArrowDown': [-0.10, 0, 'ks'], 's': [-0.10, 0, 'ks'], 'S': [-0.10, 0, 'ks'],
   'ArrowLeft': [0, 0.6, 'kl'], 'a': [0, 0.6, 'kl'], 'A': [0, 0.6, 'kl'],

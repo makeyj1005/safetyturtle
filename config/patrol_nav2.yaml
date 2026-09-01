@@ -57,7 +57,7 @@ bt_navigator:
     use_sim_time: False
     global_frame: map
     robot_base_frame: base_link
-    odom_topic: /odom
+    odom_topic: /odom_fixed  # 2026-09-01: 로봇 오도메트리 반전 보정 — odom_fix_node.py 참고
     default_bt_xml_filename: "navigate_w_replanning_and_recovery.xml"
     bt_loop_duration: 10
     default_server_timeout: 20
@@ -215,8 +215,8 @@ local_costmap:
       plugins: ["obstacle_layer", "voxel_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.25  # 1.0->0.25 : 벽 30cm 경로가 고비용 구역 안이라 경로가 곡선이 됐다
-        cost_scaling_factor: 3.0
+        inflation_radius: 0.08  # 0.25->0.15->0.08 (2026-09-01): 계속 두껍다는 피드백, 로봇 반경(0.1)에 근접하게
+        cost_scaling_factor: 5.0  # 3.0->5.0: 여유 경계에서 비용이 더 빨리 떨어지게
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
@@ -308,8 +308,8 @@ global_costmap:
         map_subscribe_transient_local: True
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.25  # 0.55->0.25 : 위와 동일
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.08  # 위와 동일 이유
       always_send_full_costmap: True
   global_costmap_client:
     ros__parameters:

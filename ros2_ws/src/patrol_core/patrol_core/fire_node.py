@@ -79,6 +79,10 @@ class FireNode(Node):
         self.declare_parameter("baud_rate", 9600)
 
         self.declare_parameter("waypoint_file", DEFAULT_WAYPOINT_FILE)
+        # 매핑·Nav2 준비가 안 된 시연(2026-09-07 발표처럼 현장 재매핑할 시간이 없는
+        # 경우)에서는 false 로 두면 Nav2 시도 자체를 건너뛰고 바로 알람만 낸다.
+        # 그동안 대피구까지 이동은 대시보드 키보드 조작으로 대신한다는 시나리오.
+        self.declare_parameter("use_nav", True)
 
         self.declare_parameter("alarm_interval_sec", 3.0)
         self.declare_parameter("sound", True)
@@ -131,7 +135,14 @@ class FireNode(Node):
         hold.data = True
         self.pub_hold.publish(hold)
 
-        self.go_to_evacuation_point()
+        if bool(self.get_parameter("use_nav").value):
+            self.go_to_evacuation_point()
+        else:
+            self.get_logger().warn(
+                "use_nav:=false — Nav2 자율이동 생략, 대피구까지는 수동(대시보드 키보드"
+                " 조작)으로 이동한다는 시나리오. 알람만 계속 낸다"
+            )
+            self.status("FIRE — 수동 대피 유도 중 (알람)")
 
         interval = float(self.get_parameter("alarm_interval_sec").value)
         self.alarm_timer = self.create_timer(interval, self.on_alarm_tick)
