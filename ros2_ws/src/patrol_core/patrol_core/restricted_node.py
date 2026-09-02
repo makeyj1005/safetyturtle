@@ -340,7 +340,10 @@ class RestrictedNode(Node):
             return
         text = str(self.get_parameter("voice_text").value)
         host = str(self.get_parameter("robot_host").value)
-        cmd = f'espeak-ng -v {self.get_parameter("voice_lang").value} "{text}" 2>&1'
+        # 2026-09-02 실측: I2S 스피커(MAX98357A)가 card 1 — 기본 출력(card 0, 헤드폰잭)
+        # 이 아니라 이쪽으로 명시해서 보내야 소리가 난다.
+        cmd = (f'espeak-ng -v {self.get_parameter("voice_lang").value} '
+              f'--stdout "{text}" | aplay -D plughw:1,0 2>&1')
         try:
             r = subprocess.run(["ssh", *SSH_OPTS, host, cmd],
                                capture_output=True, text=True, timeout=10)

@@ -93,6 +93,9 @@ DEFAULT_CASCADE = "/usr/share/opencv4/haarcascades/haarcascade_frontalface_defau
 SOUND_OK = 1          # ON — 착용 확인(출발)
 SOUND_BAD_HELMET = 3  # ERROR — 안전모 미착용. 2(LOW_BATTERY)는 저전압 경고와 겹쳐 안 쓴다
 
+SSH_OPTS = ["-o", "ConnectTimeout", "8", "-o", "BatchMode=yes",
+           "-o", "StrictHostKeyChecking=accept-new"]
+
 # MobileNet-SSD(VOC 20종)의 클래스 순서. 우리가 쓰는 건 person 뿐이다.
 DNN_CLASSES = [
     "background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus",
@@ -297,6 +300,12 @@ class HelmetNode(Node):
         self.declare_parameter("sound_wait_sec", 15.0)
         # 미착용인 동안 다시 울리기까지의 간격(초). 판단 창(5초)마다 울리게 맞췄다.
         self.declare_parameter("realert_sec", 5.0)
+
+        # 음성 안내 — 로봇 스피커(I2S, MAX98357A)로 ssh+espeak-ng 재생 (2026-09-02 추가).
+        # restricted_node/fire_node 와 같은 방식.
+        self.declare_parameter("voice_enabled", True)
+        self.declare_parameter("voice_text", "안전모를 착용하십시오")
+        self.declare_parameter("voice_lang", "ko")
 
         # --- 화면 보기 (현장 시험용) ---
         # 창을 띄워 카메라 영상과 판정을 그대로 보여준다. 순찰·Nav2 없이 그 자리에서
@@ -1196,6 +1205,7 @@ class HelmetNode(Node):
             self.last_alarm = now
             value = int(self.get_parameter("sound_value").value)
             reps = max(int(self.get_parameter("sound_repeat").value), 1)
+            self.speak()
         if value <= 0:
             return
         gap = float(self.get_parameter("sound_gap_sec").value)
@@ -1206,6 +1216,23 @@ class HelmetNode(Node):
             fut = self.cli_sound.call_async(req)
             if i < reps - 1:
                 time.sleep(gap)
+
+    def speak(self):
+        """로봇 스피커(I2S, card 1)로 음성 안내. 실패해도 무시한다."""
+        if not bool(self.get_parameter("voice_enabled").value):
+            return
+        text = str(self.get_parameter("voice_text").value)
+        host = str(self.get_parameter("robot_host").value)
+        cmd = (f'espeak-ng -v {self.get_parameter("voice_lang").value} '
+              f'--stdout "{text}" | aplay -D plughw:1,0 2>&1')
+        try:
+            r = subprocess.run(["ssh", *SSH_OPTS, host, cmd],
+                               capture_output=True, text=True, timeout=10)
+            if r.returncode != 0:
+                self.get_logger().warn(
+                    f"음성 재생 실패: {r.stderr.strip()[:200]}", throttle_duration_sec=30.0)
+        except subprocess.SubprocessError as e:                 # noqa: BLE001
+            self.get_logger().warn(f"음성 재생 ssh 실패: {e}", throttle_duration_sec=30.0)
 
         def on_done(f):
             try:

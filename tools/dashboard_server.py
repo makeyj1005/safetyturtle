@@ -222,8 +222,10 @@ function stopMove() {
 
 const KEYMAP = {
   // 표준 ROS 관례(+x = 전진). Nav2 자율주행에서 실측 검증된 방향과 같다.
-  'ArrowUp': [0.10, 0, 'kf'], 'w': [0.10, 0, 'kf'], 'W': [0.10, 0, 'kf'],
-  'ArrowDown': [-0.10, 0, 'ks'], 's': [-0.10, 0, 'ks'], 'S': [-0.10, 0, 'ks'],
+  // 2026-09-02 실측: 이 로봇은 +x 명령이 물리적으로는 후진이다(odom 자체는 일관돼서
+  // Nav2 자율주행엔 영향 없음 — 사람이 보는 버튼 이름표만 실제 방향에 맞춘다).
+  'ArrowUp': [-0.10, 0, 'kf'], 'w': [-0.10, 0, 'kf'], 'W': [-0.10, 0, 'kf'],
+  'ArrowDown': [0.10, 0, 'ks'], 's': [0.10, 0, 'ks'], 'S': [0.10, 0, 'ks'],
   'ArrowLeft': [0, 0.6, 'kl'], 'a': [0, 0.6, 'kl'], 'A': [0, 0.6, 'kl'],
   'ArrowRight': [0, -0.6, 'kr'], 'd': [0, -0.6, 'kr'], 'D': [0, -0.6, 'kr'],
 };
@@ -246,8 +248,8 @@ document.addEventListener('keyup', e => {
 });
 window.addEventListener('blur', stopMove);
 
-document.getElementById('kf').addEventListener('mousedown', () => startMove(0.10, 0, 'kf'));
-document.getElementById('ks').addEventListener('mousedown', () => startMove(-0.10, 0, 'ks'));
+document.getElementById('kf').addEventListener('mousedown', () => startMove(-0.10, 0, 'kf'));
+document.getElementById('ks').addEventListener('mousedown', () => startMove(0.10, 0, 'ks'));
 document.getElementById('kl').addEventListener('mousedown', () => startMove(0, 0.6, 'kl'));
 document.getElementById('kr').addEventListener('mousedown', () => startMove(0, -0.6, 'kr'));
 document.querySelectorAll('.keys button').forEach(b => {
