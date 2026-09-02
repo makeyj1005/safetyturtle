@@ -303,9 +303,10 @@ class HelmetNode(Node):
 
         # 음성 안내 — 로봇 스피커(I2S, MAX98357A)로 ssh+espeak-ng 재생 (2026-09-02 추가).
         # restricted_node/fire_node 와 같은 방식.
+        # gTTS 로 미리 만든 mp3 재생(2026-09-02 변경, fire_node.py 참고)
         self.declare_parameter("voice_enabled", True)
-        self.declare_parameter("voice_text", "안전모를 착용하십시오")
-        self.declare_parameter("voice_lang", "ko")
+        self.declare_parameter("voice_sound_file", "~/vibe/ex1/sounds/helmet_bad.mp3")
+        self.declare_parameter("voice_gain", 65536)
 
         # --- 화면 보기 (현장 시험용) ---
         # 창을 띄워 카메라 영상과 판정을 그대로 보여준다. 순찰·Nav2 없이 그 자리에서
@@ -1218,13 +1219,13 @@ class HelmetNode(Node):
                 time.sleep(gap)
 
     def speak(self):
-        """로봇 스피커(I2S, card 1)로 음성 안내. 실패해도 무시한다."""
+        """로봇 스피커(I2S, card 1)로 미리 만든 gTTS mp3 재생. 실패해도 무시한다."""
         if not bool(self.get_parameter("voice_enabled").value):
             return
-        text = str(self.get_parameter("voice_text").value)
+        path = str(self.get_parameter("voice_sound_file").value)
+        gain = int(self.get_parameter("voice_gain").value)
         host = str(self.get_parameter("robot_host").value)
-        cmd = (f'espeak-ng -v {self.get_parameter("voice_lang").value} '
-              f'--stdout "{text}" | aplay -D plughw:1,0 2>&1')
+        cmd = f'mpg123 -a plughw:1,0 -f {gain} {path} 2>&1'
         try:
             r = subprocess.run(["ssh", *SSH_OPTS, host, cmd],
                                capture_output=True, text=True, timeout=10)

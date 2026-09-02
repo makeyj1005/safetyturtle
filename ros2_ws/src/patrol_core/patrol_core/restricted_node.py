@@ -103,9 +103,10 @@ class RestrictedNode(Node):
 
         # 음성 안내 — 로봇에 물린 스피커로 ssh + espeak-ng 재생 (2026-08-29 추가,
         # 스피커 연결 전이라 미검증. 실패해도 노드는 계속 돈다).
+        # gTTS 로 미리 만든 mp3 재생(2026-09-02 변경, fire_node.py 참고)
         self.declare_parameter("voice_enabled", True)
-        self.declare_parameter("voice_text", "작업금지 시간입니다")
-        self.declare_parameter("voice_lang", "ko")
+        self.declare_parameter("voice_sound_file", "~/vibe/ex1/sounds/intrusion.mp3")
+        self.declare_parameter("voice_gain", 65536)
         self.declare_parameter("robot_host", "rpi@192.168.0.73")
 
         self.declare_parameter("quiet", False)
@@ -335,15 +336,13 @@ class RestrictedNode(Node):
                 time.sleep(0.2)
 
     def speak(self):
-        """로봇에 물린 스피커로 espeak-ng 재생. 스피커가 없으면 실패해도 무시한다."""
+        """로봇 스피커(I2S, card 1)로 미리 만든 gTTS mp3 재생. 실패해도 무시한다."""
         if not bool(self.get_parameter("voice_enabled").value):
             return
-        text = str(self.get_parameter("voice_text").value)
+        path = str(self.get_parameter("voice_sound_file").value)
+        gain = int(self.get_parameter("voice_gain").value)
         host = str(self.get_parameter("robot_host").value)
-        # 2026-09-02 실측: I2S 스피커(MAX98357A)가 card 1 — 기본 출력(card 0, 헤드폰잭)
-        # 이 아니라 이쪽으로 명시해서 보내야 소리가 난다.
-        cmd = (f'espeak-ng -v {self.get_parameter("voice_lang").value} '
-              f'--stdout "{text}" | aplay -D plughw:1,0 2>&1')
+        cmd = f'mpg123 -a plughw:1,0 -f {gain} {path} 2>&1'
         try:
             r = subprocess.run(["ssh", *SSH_OPTS, host, cmd],
                                capture_output=True, text=True, timeout=10)

@@ -90,9 +90,12 @@ class FireNode(Node):
         self.declare_parameter("sound_repeat", 3)
         self.declare_parameter("sound_wait_sec", 15.0)
 
+        # gTTS(구글 음성)로 미리 만들어 둔 mp3 를 재생한다 — espeak-ng 보다 훨씬 자연스럽고,
+        # 매번 호출할 때 인터넷 왕복이 없어 더 빠르다(2026-09-02 변경).
+        # 만드는 법: gTTS(text=..., lang="ko").save(경로) — tools/make_voice_lines.py 참고.
         self.declare_parameter("voice_enabled", True)
-        self.declare_parameter("voice_text", "화재입니다 대피하세요")
-        self.declare_parameter("voice_lang", "ko")
+        self.declare_parameter("voice_sound_file", "~/vibe/ex1/sounds/fire_alarm.mp3")
+        self.declare_parameter("voice_gain", 65536)  # mpg123 -f 값. 32768=1배, 65536=2배
         self.declare_parameter("robot_host", "rpi@192.168.0.73")
 
         self.declare_parameter("db_path", event_log.DEFAULT_DB)
@@ -244,11 +247,12 @@ class FireNode(Node):
     def speak(self):
         if not bool(self.get_parameter("voice_enabled").value):
             return
-        text = str(self.get_parameter("voice_text").value)
+        path = str(self.get_parameter("voice_sound_file").value)
+        gain = int(self.get_parameter("voice_gain").value)
         host = str(self.get_parameter("robot_host").value)
-        # 2026-09-02 실측: I2S 스피커(MAX98357A)가 card 1 — 명시해서 보내야 소리 난다.
-        cmd = (f'espeak-ng -v {self.get_parameter("voice_lang").value} '
-              f'--stdout "{text}" | aplay -D plughw:1,0 2>&1')
+        # I2S 스피커(MAX98357A)가 card 1 — 명시해서 보내야 소리 난다. 이 앰프는 하드웨어
+        # 볼륨조절이 없어(amixer -c 1 에 컨트롤 자체가 없음) -f 로 소프트 증폭한다.
+        cmd = f'mpg123 -a plughw:1,0 -f {gain} {path} 2>&1'
         try:
             r = subprocess.run(["ssh", *SSH_OPTS, host, cmd],
                                capture_output=True, text=True, timeout=10)
