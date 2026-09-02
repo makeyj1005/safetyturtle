@@ -21,6 +21,7 @@
 두고, 실측해서 반대면 --ros-args -p flame_active_high:=false 처럼 뒤집을 것.
 """
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool
@@ -40,10 +41,15 @@ class GpioIoNode(Node):
     def __init__(self):
         super().__init__("gpio_io_node")
 
-        # 2026-09-02 실측: 평상시(불 없음) HIGH, 감지시 LOW인 모듈이었다 — 기본을 false로.
-        self.declare_parameter("flame_active_high", False)
+        # 2026-09-02 실측(감도 조절 후 라이터로 확인): 평상시 LOW, 불꽃 감지시 HIGH.
+        # ⚠️ 감도 조절 나사를 돌려야 반응한다 — 조절 전에는 계속 LOW로 고정돼 있어서
+        #    "배선이 잘못됐나" 오진하기 쉽다. 불을 켠 상태로 나사를 돌려서 맞출 것.
+        self.declare_parameter("flame_active_high", True)
         self.declare_parameter("pir_active_high", True)
         self.declare_parameter("poll_hz", 10.0)
+        # 화재는 오탐 대가가 크니(불필요한 대피 소동) 순간 튐을 걸러낸다 — 이만큼
+        # 연속으로 같은 값이 나와야 실제로 바뀐 것으로 본다. poll_hz=10 이면 0.3초.
+        self.declare_parameter("flame_debounce_n", 3)
 
         if GPIO is None:
             self.get_logger().error(
@@ -66,6 +72,8 @@ class GpioIoNode(Node):
 
         self.last_flame = None
         self.last_pir = None
+        self.flame_candidate = None
+        self.flame_streak = 0
 
         hz = float(self.get_parameter("poll_hz").value)
         self.create_timer(1.0 / hz, self.poll)
@@ -81,7 +89,13 @@ class GpioIoNode(Node):
 
         flame_raw = GPIO.input(PIN_FLAME) == GPIO.HIGH
         flame = flame_raw if flame_high else not flame_raw
-        if flame != self.last_flame:
+        need_n = int(self.get_parameter("flame_debounce_n").value)
+        if flame == self.flame_candidate:
+            self.flame_streak += 1
+        else:
+            self.flame_candidate = flame
+            self.flame_streak = 1
+        if self.flame_streak >= need_n and flame != self.last_flame:
             self.last_flame = flame
             m = Bool()
             m.data = flame
@@ -112,11 +126,13 @@ def main():
     node = GpioIoNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        # try_shutdown: SIGTERM 으로 죽일 때 이미 shutdown 이 불린 경우가 있어
+        # rclpy.shutdown() 을 그냥 부르면 RCLError 를 던진다(다른 노드들과 같은 처리).
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

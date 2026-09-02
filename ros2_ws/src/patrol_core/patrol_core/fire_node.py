@@ -4,18 +4,23 @@
 [VM에서 실행]
   ros2 run patrol_core fire_node
 
-  하드웨어(아두이노 불꽃센서) 없이 테스트 — 수동으로 화재를 발생/해제시킨다:
+  수동으로도 화재를 발생/해제시킬 수 있다(하드웨어 없이 시험할 때도 이걸로):
   ros2 topic pub --once /fire/trigger std_msgs/msg/Bool "{data: true}"   # 발생
   ros2 topic pub --once /fire/trigger std_msgs/msg/Bool "{data: false}"  # 해제(수동)
 
-[입력]  /fire/trigger  (Bool)  True=화재 감지, False=수동 해제
-        (아두이노 불꽃센서 시리얼 입력은 TODO — 하드웨어 연결 전. 연결되면 시리얼
-        읽기 결과를 이 토픽에 발행하는 브리지만 추가하면 이 노드는 그대로 재사용된다)
+[입력]  /fire/trigger    (Bool)  True=화재 감지, False=수동 해제 (수동/시험용)
+        /flame/detected  (Bool)  로봇 GPIO23 불꽃센서 실측값(gpio_io_node.py 가 낸다,
+                                 2026-09-02 연동 — 아두이노 아니라 Pi GPIO 직결이었다).
+                                 두 입력 모두 같은 on_trigger 로 들어간다 — 센서든
+                                 사람이든 True 를 보내면 화재 대응을 시작한다.
+                                 ⚠️ 해제(False)도 센서가 자동으로 보낼 수 있다는 뜻이다
+                                 — 실측 오탐이 걱정되면 gpio_io_node 의
+                                 flame_debounce_n 을 늘릴 것(기본 3=0.3초 연속).
 [출력]  /fire/status   (String)  진단·웹 대시보드용
         /patrol/hold   (Bool)    True — 순찰을 세우고 이 노드가 Nav2 를 넘겨받는다
         /sound         (service) 반복 경고음
-        음성("화재입니다 대피하세요")은 로봇 스피커로 ssh+espeak-ng 재생(미검증 —
-        restricted_node 와 같은 방식, 스피커 연결 전)
+        음성은 로봇 스피커(I2S, MAX98357A)로 ssh+mpg123 재생 — sounds/fire_alarm.mp3
+        (edge-tts 로 미리 생성, tools/make_voice_lines.py 참고)
         logs/events.sqlite 에 화재 발생 기록(해제는 안 남긴다 — restricted_node 와
         같은 정책, 2026-08-29 사용자 결정)
 
@@ -37,9 +42,6 @@ TODO — 대피구가 여러 개 생기면 추가할 것). 아직 등록된 지�
 무관하게 화재가 해제될 때까지 alarm_interval_sec 마다 부저+음성을 반복한다 —
 이동 중에도 울려야 사람이 로봇을 "따라갈" 방향을 소리로 짐작할 수 있다.
 
-TODO: 아두이노 불꽃센서 시리얼 프로토콜 확정 후 pyserial 로 읽어 /fire/trigger 에
-      발행하는 브리지 추가(tools/fire_arduino/ 스케치와 맞출 것). 지금은 이 토픽을
-      직접 publish 해서 수동/시험용으로 쓴다.
 """
 import math
 import os
@@ -66,17 +68,13 @@ DEFAULT_WAYPOINT_FILE = os.path.join(EX1, "maps", "evacuation_points.yaml")
 # helmet_node=1,3 / restricted_node=4 와 안 겹치게 5(BUTTON2)를 쓴다.
 SOUND_FIRE = 5
 
-SSH_OPTS = ["-o", "ConnectTimeout", "8", "-o", "BatchMode=yes",
+SSH_OPTS = ["-o", "ConnectTimeout=8", "-o", "BatchMode=yes",
            "-o", "StrictHostKeyChecking=accept-new"]
 
 
 class FireNode(Node):
     def __init__(self):
         super().__init__("fire_node")
-
-        # 아두이노 시리얼 — TODO, 하드웨어 연결 전. 지금은 안 쓴다(/fire/trigger 로 대신 시험).
-        self.declare_parameter("serial_port", "/dev/ttyACM1")
-        self.declare_parameter("baud_rate", 9600)
 
         self.declare_parameter("waypoint_file", DEFAULT_WAYPOINT_FILE)
         # 매핑·Nav2 준비가 안 된 시연(2026-09-07 발표처럼 현장 재매핑할 시간이 없는
@@ -85,18 +83,26 @@ class FireNode(Node):
         self.declare_parameter("use_nav", True)
 
         self.declare_parameter("alarm_interval_sec", 3.0)
+        # 한 번 화재로 판정하면 최소 이 시간(초)은 경보를 유지한다.
+        # [왜 필요한가 — 2026-09-02 실측] 불꽃센서는 불을 조금만 흔들거나 각도가
+        # 바뀌면 감지/미감지를 1초 안에 오간다. 그대로 두면 음성 안내(14초)가 한 문장도
+        # 못 끝내고 끊기고, 부저·LED·LCD 가 깜빡거려 오히려 상황 파악을 방해했다.
+        # 실제 화재경보기도 한 번 울리면 바로 멈추지 않는다(래치) — 같은 이유다.
+        self.declare_parameter("min_alarm_sec", 20.0)
+        # 부저를 이 간격(초)마다 뒤집어 삐-삐- 경보음을 만든다. 능동부저는 톤을
+        # 바꿀 수 없어서(3.3V 고정) 켜고 끄는 리듬으로만 "경보" 느낌을 낸다.
+        self.declare_parameter("buzzer_beep_sec", 0.25)
+        self.declare_parameter("buzzer_enabled", True)
         self.declare_parameter("sound", True)
         self.declare_parameter("sound_value", SOUND_FIRE)
         self.declare_parameter("sound_repeat", 3)
         self.declare_parameter("sound_wait_sec", 15.0)
 
-        # gTTS(구글 음성)로 미리 만들어 둔 mp3 를 재생한다 — espeak-ng 보다 훨씬 자연스럽고,
-        # 매번 호출할 때 인터넷 왕복이 없어 더 빠르다(2026-09-02 변경).
-        # 만드는 법: gTTS(text=..., lang="ko").save(경로) — tools/make_voice_lines.py 참고.
+        # 음성 안내 — 로봇 speaker_node 에 /speaker/play 로 이름만 보낸다.
+        # 실제 파일(sounds/fire_alarm.mp3)과 볼륨은 speaker_node 가 관리한다.
+        # 문구를 바꾸려면 tools/make_voice_lines.py 를 고쳐 mp3 만 다시 만들면 된다.
         self.declare_parameter("voice_enabled", True)
-        self.declare_parameter("voice_sound_file", "~/vibe/ex1/sounds/fire_alarm.mp3")
-        self.declare_parameter("voice_gain", 65536)  # mpg123 -f 값. 32768=1배, 65536=2배
-        self.declare_parameter("robot_host", "rpi@192.168.0.73")
+        self.declare_parameter("voice_sound", "fire_alarm")
 
         self.declare_parameter("db_path", event_log.DEFAULT_DB)
         self.declare_parameter("quiet", False)
@@ -104,23 +110,38 @@ class FireNode(Node):
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
         self.pub_status = self.create_publisher(String, "/fire/status", qos)
         self.pub_hold = self.create_publisher(Bool, "/patrol/hold", qos)
+        # 로봇 GPIO 부저(24)·LED(25) — gpio_io_node.py 가 받아서 실제 핀을 켠다.
+        # 사양서: "능동부저를 경보음처럼 울리고 LED를 켠다" (2026-09-02 연동)
+        self.pub_buzzer = self.create_publisher(Bool, "/buzzer/set", qos)
+        self.pub_led = self.create_publisher(Bool, "/led/set", qos)
+        self.pub_speaker = self.create_publisher(String, "/speaker/play", qos)
         self.cli_sound = self.create_client(Sound, "/sound")
         self.cli_pose = ActionClient(self, NavigateToPose, "navigate_to_pose")
 
         self.create_subscription(Bool, "/fire/trigger", self.on_trigger, qos)
+        # 로봇 GPIO23 불꽃센서 실측값 — gpio_io_node.py 가 낸다. 수동 트리거와 같은
+        # 콜백으로 합친다(둘 다 True 를 보내면 화재 대응 시작).
+        self.create_subscription(Bool, "/flame/detected", self.on_trigger, qos)
 
         self.active = False
         self.goal_handle = None
         self.alarm_timer = None
+        self.buzzer_timer = None
+        self.buzzer_on = False
+        self.fire_started_at = 0.0
+        self.clear_timer = None
+        # 센서가 마지막으로 보고한 값. 최소 경보 시간이 끝났을 때 "아직도 불이
+        # 있는지"를 이걸로 판단한다.
+        self.flame_now = False
 
-        self.get_logger().warn(
-            "fire_node 시작 — 아두이노 불꽃센서 미연결(TODO). "
-            "/fire/trigger 로 수동 시험할 것"
+        self.get_logger().info(
+            "fire_node 시작 — /flame/detected(GPIO 불꽃센서) 와 /fire/trigger(수동) 둘 다 듣는다"
         )
 
     # ---------------- 트리거 ----------------
     def on_trigger(self, msg: Bool):
-        if bool(msg.data):
+        self.flame_now = bool(msg.data)
+        if self.flame_now:
             self.start_fire()
         else:
             self.clear_fire()
@@ -129,6 +150,7 @@ class FireNode(Node):
         if self.active:
             return
         self.active = True
+        self.fire_started_at = time.time()
         self.get_logger().error("화재 감지 — 비상대피구로 이동, 순찰을 넘겨받는다")
         self.status("FIRE — 대피구로 이동 중")
         event_log.log_event("fire_node", "alert", "화재 감지 — 대피구 이동 시작",
@@ -147,27 +169,88 @@ class FireNode(Node):
             )
             self.status("FIRE — 수동 대피 유도 중 (알람)")
 
+        # LED 는 화재 동안 계속 켜 둔다(사양서: "LED를 켠다").
+        self.set_led(True)
+
         interval = float(self.get_parameter("alarm_interval_sec").value)
         self.alarm_timer = self.create_timer(interval, self.on_alarm_tick)
         self.on_alarm_tick()      # 첫 알림은 바로
 
-    def clear_fire(self):
+        # 부저는 짧게 껐다 켜서 경보음처럼 만든다(능동부저라 톤 조절이 안 되므로
+        # 켜고 끄는 리듬으로 "경보" 느낌을 낸다 — 2026-09-02 실측으로 확인).
+        if bool(self.get_parameter("buzzer_enabled").value):
+            bz = float(self.get_parameter("buzzer_beep_sec").value)
+            self.buzzer_timer = self.create_timer(bz, self.on_buzzer_tick)
+
+    def clear_fire(self, force=False):
         if not self.active:
             return
+
+        # 최소 경보 시간이 안 지났으면 아직 끄지 않는다 — 남은 시간 뒤에 다시 본다.
+        min_sec = float(self.get_parameter("min_alarm_sec").value)
+        elapsed = time.time() - self.fire_started_at
+        if not force and elapsed < min_sec:
+            if self.clear_timer is None:
+                remain = max(min_sec - elapsed, 0.1)
+                self.clear_timer = self.create_timer(remain, self.on_min_alarm_done)
+                self.get_logger().info(
+                    f"불꽃이 사라졌지만 최소 경보시간({min_sec:.0f}초)까지 "
+                    f"{remain:.0f}초 더 유지한다"
+                )
+            return
+
         self.active = False
-        self.get_logger().warn("화재 해제(수동) — 순찰로 돌아간다")
-        self.status("clear (수동 해제)")
+        if self.clear_timer is not None:
+            self.clear_timer.cancel()
+            self.clear_timer = None
+        self.get_logger().warn("화재 해제 — 순찰로 돌아간다")
+        self.status("clear (해제)")
 
         if self.alarm_timer is not None:
             self.alarm_timer.cancel()
             self.alarm_timer = None
+        if self.buzzer_timer is not None:
+            self.buzzer_timer.cancel()
+            self.buzzer_timer = None
         if self.goal_handle is not None:
             self.goal_handle.cancel_goal_async()
             self.goal_handle = None
 
+        # 부저·LED 를 반드시 끈다 — 여기서 빠뜨리면 화재가 끝나도 계속 울린다.
+        self.set_buzzer(False)
+        self.set_led(False)
+
         hold = Bool()
         hold.data = False
         self.pub_hold.publish(hold)
+
+    def on_min_alarm_done(self):
+        """최소 경보 시간이 끝났다 — 불이 아직 있으면 계속, 없으면 진짜로 해제한다."""
+        if self.clear_timer is not None:
+            self.clear_timer.cancel()
+            self.clear_timer = None
+        if self.flame_now:
+            self.get_logger().warn("최소 경보시간 지났지만 불꽃이 여전히 감지된다 — 경보 유지")
+            return
+        self.clear_fire(force=True)
+
+    # ---------------- 부저·LED ----------------
+    def set_buzzer(self, on):
+        m = Bool()
+        m.data = bool(on)
+        self.pub_buzzer.publish(m)
+        self.buzzer_on = bool(on)
+
+    def set_led(self, on):
+        m = Bool()
+        m.data = bool(on)
+        self.pub_led.publish(m)
+
+    def on_buzzer_tick(self):
+        """buzzer_beep_sec 마다 부저를 뒤집어 삐-삐- 경보음을 만든다."""
+        if not self.active:
+            return
+        self.set_buzzer(not self.buzzer_on)
 
     # ---------------- 이동 ----------------
     def load_evacuation_point(self):
@@ -245,23 +328,12 @@ class FireNode(Node):
                 time.sleep(0.2)
 
     def speak(self):
+        """로봇 speaker_node 에 재생 요청만 보낸다(ssh 안 씀 — speaker_node.py 주석 참고)."""
         if not bool(self.get_parameter("voice_enabled").value):
             return
-        path = str(self.get_parameter("voice_sound_file").value)
-        gain = int(self.get_parameter("voice_gain").value)
-        host = str(self.get_parameter("robot_host").value)
-        # I2S 스피커(MAX98357A)가 card 1 — 명시해서 보내야 소리 난다. 이 앰프는 하드웨어
-        # 볼륨조절이 없어(amixer -c 1 에 컨트롤 자체가 없음) -f 로 소프트 증폭한다.
-        cmd = f'mpg123 -a plughw:1,0 -f {gain} {path} 2>&1'
-        try:
-            r = subprocess.run(["ssh", *SSH_OPTS, host, cmd],
-                               capture_output=True, text=True, timeout=10)
-            if r.returncode != 0:
-                self.get_logger().warn(
-                    f"음성 재생 실패(스피커 미연결일 수 있음): {r.stderr.strip()[:200]}",
-                    throttle_duration_sec=30.0)
-        except subprocess.SubprocessError as e:                 # noqa: BLE001
-            self.get_logger().warn(f"음성 재생 ssh 실패: {e}", throttle_duration_sec=30.0)
+        m = String()
+        m.data = str(self.get_parameter("voice_sound").value)
+        self.pub_speaker.publish(m)
 
     def status(self, text):
         m = String()

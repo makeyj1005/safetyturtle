@@ -57,7 +57,7 @@ DNN_MODEL = "MobileNetSSD_deploy.caffemodel"
 # helmet_node 가 1(ON)·3(ERROR) 를 쓰므로 겹치지 않게 4(BUTTON1) 를 쓴다.
 SOUND_RESTRICTED = 4
 
-SSH_OPTS = ["-o", "ConnectTimeout", "8", "-o", "BatchMode=yes",
+SSH_OPTS = ["-o", "ConnectTimeout=8", "-o", "BatchMode=yes",
            "-o", "StrictHostKeyChecking=accept-new"]
 
 
@@ -101,13 +101,9 @@ class RestrictedNode(Node):
         self.declare_parameter("sound_repeat", 2)
         self.declare_parameter("sound_wait_sec", 15.0)
 
-        # 음성 안내 — 로봇에 물린 스피커로 ssh + espeak-ng 재생 (2026-08-29 추가,
-        # 스피커 연결 전이라 미검증. 실패해도 노드는 계속 돈다).
-        # gTTS 로 미리 만든 mp3 재생(2026-09-02 변경, fire_node.py 참고)
+        # 음성 안내 — 로봇 speaker_node 에 /speaker/play 로 이름만 보낸다(fire_node 와 동일).
         self.declare_parameter("voice_enabled", True)
-        self.declare_parameter("voice_sound_file", "~/vibe/ex1/sounds/intrusion.mp3")
-        self.declare_parameter("voice_gain", 65536)
-        self.declare_parameter("robot_host", "rpi@192.168.0.73")
+        self.declare_parameter("voice_sound", "intrusion")
 
         self.declare_parameter("quiet", False)
         self.declare_parameter("view", False)
@@ -120,6 +116,7 @@ class RestrictedNode(Node):
 
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
         self.pub_status = self.create_publisher(String, "/restricted/status", qos)
+        self.pub_speaker = self.create_publisher(String, "/speaker/play", qos)
         self.cli_sound = self.create_client(Sound, "/sound")
 
         self.create_subscription(CompressedImage, str(self.get_parameter("topic").value),
@@ -336,22 +333,12 @@ class RestrictedNode(Node):
                 time.sleep(0.2)
 
     def speak(self):
-        """로봇 스피커(I2S, card 1)로 미리 만든 gTTS mp3 재생. 실패해도 무시한다."""
+        """로봇 speaker_node 에 재생 요청만 보낸다(ssh 안 씀 — speaker_node.py 주석 참고)."""
         if not bool(self.get_parameter("voice_enabled").value):
             return
-        path = str(self.get_parameter("voice_sound_file").value)
-        gain = int(self.get_parameter("voice_gain").value)
-        host = str(self.get_parameter("robot_host").value)
-        cmd = f'mpg123 -a plughw:1,0 -f {gain} {path} 2>&1'
-        try:
-            r = subprocess.run(["ssh", *SSH_OPTS, host, cmd],
-                               capture_output=True, text=True, timeout=10)
-            if r.returncode != 0:
-                self.get_logger().warn(
-                    f"음성 재생 실패(스피커 미연결일 수 있음): {r.stderr.strip()[:200]}",
-                    throttle_duration_sec=30.0)
-        except subprocess.SubprocessError as e:                 # noqa: BLE001
-            self.get_logger().warn(f"음성 재생 ssh 실패: {e}", throttle_duration_sec=30.0)
+        m = String()
+        m.data = str(self.get_parameter("voice_sound").value)
+        self.pub_speaker.publish(m)
 
     # ---------------- 기록 ----------------
     def quiet(self):

@@ -93,7 +93,7 @@ DEFAULT_CASCADE = "/usr/share/opencv4/haarcascades/haarcascade_frontalface_defau
 SOUND_OK = 1          # ON — 착용 확인(출발)
 SOUND_BAD_HELMET = 3  # ERROR — 안전모 미착용. 2(LOW_BATTERY)는 저전압 경고와 겹쳐 안 쓴다
 
-SSH_OPTS = ["-o", "ConnectTimeout", "8", "-o", "BatchMode=yes",
+SSH_OPTS = ["-o", "ConnectTimeout=8", "-o", "BatchMode=yes",
            "-o", "StrictHostKeyChecking=accept-new"]
 
 # MobileNet-SSD(VOC 20종)의 클래스 순서. 우리가 쓰는 건 person 뿐이다.
@@ -303,10 +303,9 @@ class HelmetNode(Node):
 
         # 음성 안내 — 로봇 스피커(I2S, MAX98357A)로 ssh+espeak-ng 재생 (2026-09-02 추가).
         # restricted_node/fire_node 와 같은 방식.
-        # gTTS 로 미리 만든 mp3 재생(2026-09-02 변경, fire_node.py 참고)
+        # 음성 안내 — 로봇 speaker_node 에 /speaker/play 로 이름만 보낸다(fire_node 와 동일).
         self.declare_parameter("voice_enabled", True)
-        self.declare_parameter("voice_sound_file", "~/vibe/ex1/sounds/helmet_bad.mp3")
-        self.declare_parameter("voice_gain", 65536)
+        self.declare_parameter("voice_sound", "helmet_bad")
 
         # --- 화면 보기 (현장 시험용) ---
         # 창을 띄워 카메라 영상과 판정을 그대로 보여준다. 순찰·Nav2 없이 그 자리에서
@@ -386,6 +385,7 @@ class HelmetNode(Node):
 
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
         self.pub_hold = self.create_publisher(Bool, "/patrol/hold", qos)
+        self.pub_speaker = self.create_publisher(String, "/speaker/play", qos)
         self.pub_status = self.create_publisher(String, "/helmet/status", qos)
         self.pub_cam = self.create_publisher(Bool, "/webcam/enable", qos)
         # 영상을 받고 있는지 알린다. patrol_node 가 시작지점에서 이걸 기다린다 —
@@ -1218,23 +1218,6 @@ class HelmetNode(Node):
             if i < reps - 1:
                 time.sleep(gap)
 
-    def speak(self):
-        """로봇 스피커(I2S, card 1)로 미리 만든 gTTS mp3 재생. 실패해도 무시한다."""
-        if not bool(self.get_parameter("voice_enabled").value):
-            return
-        path = str(self.get_parameter("voice_sound_file").value)
-        gain = int(self.get_parameter("voice_gain").value)
-        host = str(self.get_parameter("robot_host").value)
-        cmd = f'mpg123 -a plughw:1,0 -f {gain} {path} 2>&1'
-        try:
-            r = subprocess.run(["ssh", *SSH_OPTS, host, cmd],
-                               capture_output=True, text=True, timeout=10)
-            if r.returncode != 0:
-                self.get_logger().warn(
-                    f"음성 재생 실패: {r.stderr.strip()[:200]}", throttle_duration_sec=30.0)
-        except subprocess.SubprocessError as e:                 # noqa: BLE001
-            self.get_logger().warn(f"음성 재생 ssh 실패: {e}", throttle_duration_sec=30.0)
-
         def on_done(f):
             try:
                 r = f.result()
@@ -1244,7 +1227,16 @@ class HelmetNode(Node):
             if r is not None and not r.success:
                 self.get_logger().warn(f"부저가 울리지 않았다: {r.message}")
 
-        fut.add_done_callback(on_done)
+        if fut is not None:
+            fut.add_done_callback(on_done)
+
+    def speak(self):
+        """로봇 speaker_node 에 재생 요청만 보낸다(ssh 안 씀 — speaker_node.py 주석 참고)."""
+        if not bool(self.get_parameter("voice_enabled").value):
+            return
+        m = String()
+        m.data = str(self.get_parameter("voice_sound").value)
+        self.pub_speaker.publish(m)
 
     # ---------------- 그림 ----------------
     def annotate(self, frame, worst, verdict):
