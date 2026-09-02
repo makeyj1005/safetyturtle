@@ -86,10 +86,17 @@ class RestrictedNode(Node):
         self.declare_parameter("yolo_device", "0")
 
         # 제한시간 — HH:MM. start > end 면 자정을 넘는 구간(새벽)으로 본다.
-        self.declare_parameter("start_time", "22:00")
+        # 2026-09-02 사용자 결정: 야간 작업금지는 자정~06:00.
+        # (화재 감지는 시간 제한 없이 24시간 — fire_node 는 이 창을 아예 안 본다)
+        self.declare_parameter("start_time", "00:00")
         self.declare_parameter("end_time", "06:00")
         # 테스트용 — 켜면 시간 무관하게 항상 제한시간으로 취급한다.
+        # 운용 중에는 /restricted/mode 토픽(웹 대시보드)으로 바꾸는 걸 권한다.
         self.declare_parameter("always_restricted", False)
+        # 작업자가 웹에서 바꾸는 운전 모드. auto=시간표대로, on=강제 감시,
+        # off=감시 중지. 파라미터가 아니라 토픽으로 받는 이유: 대시보드가 파라미터
+        # 서비스를 부르려면 노드 이름·타입을 알아야 하는데, 토픽이면 그냥 쏘면 된다.
+        self.declare_parameter("mode", "auto")
 
         # 판정 히스테리시스 — helmet_node 와 같은 방식(연속 프레임)
         self.declare_parameter("alert_frames", 3)
@@ -108,6 +115,8 @@ class RestrictedNode(Node):
         self.declare_parameter("quiet", False)
         self.declare_parameter("view", False)
         self.declare_parameter("db_path", event_log.DEFAULT_DB)
+        # 침입 감지 시 증거 사진을 logs/shots_web/ 에 저장한다(대시보드에서 볼 수 있다).
+        self.declare_parameter("save_shot", True)
 
         self.net = None
         self.hog = None
@@ -117,6 +126,7 @@ class RestrictedNode(Node):
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
         self.pub_status = self.create_publisher(String, "/restricted/status", qos)
         self.pub_speaker = self.create_publisher(String, "/speaker/play", qos)
+        self.create_subscription(String, "/restricted/mode", self.on_mode, qos)
         self.cli_sound = self.create_client(Sound, "/sound")
 
         self.create_subscription(CompressedImage, str(self.get_parameter("topic").value),
@@ -223,15 +233,40 @@ class RestrictedNode(Node):
         return out
 
     # ---------------- 시간 판정 ----------------
-    def in_restricted_window(self):
-        if bool(self.get_parameter("always_restricted").value):
-            return True
+    def in_time_window(self):
+        """지금이 시간표상 작업금지 시간인가 (모드와 무관하게 순수 시간만 본다)."""
         start = parse_hhmm(str(self.get_parameter("start_time").value))
         end = parse_hhmm(str(self.get_parameter("end_time").value))
         now_min = time.localtime().tm_hour * 60 + time.localtime().tm_min
         if start <= end:
             return start <= now_min < end
         return now_min >= start or now_min < end          # 자정을 넘는 구간
+
+    def in_restricted_window(self):
+        """실제로 감시할 것인가 = 모드 + 시간표를 합친 결론."""
+        if bool(self.get_parameter("always_restricted").value):
+            return True
+        mode = str(self.get_parameter("mode").value).lower()
+        if mode == "on":
+            return True
+        if mode == "off":
+            return False
+        return self.in_time_window()                      # auto
+
+    def on_mode(self, msg: String):
+        """웹 대시보드가 보내는 운전 모드 변경 (auto | on | off)."""
+        want = msg.data.strip().lower()
+        if want not in ("auto", "on", "off"):
+            self.get_logger().warn(f"알 수 없는 모드 '{msg.data}' — 무시한다")
+            return
+        cur = str(self.get_parameter("mode").value).lower()
+        if want == cur:
+            return
+        self.set_parameters([Parameter("mode", value=want)])
+        self.get_logger().warn(f"작업금지 감시 모드 변경: {cur} -> {want}")
+        # 감시를 끄면 켜져 있던 경고도 함께 내린다(화면에 남아 오해하지 않게).
+        if want == "off" and self.alerting:
+            self.clear_alert("감시 모드 off")
 
     # ---------------- 프레임 처리 ----------------
     def on_frame(self, msg: CompressedImage):
@@ -260,12 +295,12 @@ class RestrictedNode(Node):
         need_good = int(self.get_parameter("clear_frames").value)
 
         if self.bad_streak >= need_bad and not self.alerting:
-            self.raise_alert(len(persons))
+            self.raise_alert(len(persons), frame=frame, persons=persons)
         elif self.alerting and self.good_streak >= need_good:
             self.clear_alert(f"{need_good}장 연속 사람 없음")
         elif self.alerting and self.bad_streak >= need_bad:
             # 계속 사람이 있으면 realert_sec 마다 다시 알린다.
-            self.raise_alert(len(persons), rerung=True)
+            self.raise_alert(len(persons), rerung=True, frame=frame, persons=persons)
 
     # ---------------- 화면 보기 ----------------
     def show(self, frame, persons):
@@ -293,7 +328,7 @@ class RestrictedNode(Node):
             self.set_parameters([Parameter("view", value=False)])
 
     # ---------------- 경고 ----------------
-    def raise_alert(self, n_person, rerung=False):
+    def raise_alert(self, n_person, rerung=False, frame=None, persons=None):
         now = time.time()
         if rerung and now - self.last_alarm < float(
                 self.get_parameter("realert_sec").value):
@@ -302,9 +337,28 @@ class RestrictedNode(Node):
         self.last_alarm = now
         self.status(f"ALERT — 작업금지 시간에 사람 {n_person}명 발견")
         self.get_logger().warn(f"작업금지 시간대 — 사람 {n_person}명 발견")
+
+        # 증거 사진을 남긴다(사양서: "사람이 감지된 시간과 카메라로 찍은 사진을
+        # 웹서버에 기록"). 사람 상자를 그려서 저장한다 — 나중에 볼 때 왜 경고가
+        # 났는지 바로 알 수 있어야 한다.
+        image = None
+        if frame is not None and bool(self.get_parameter("save_shot").value):
+            shot = frame.copy()
+            for (x1, y1, x2, y2), conf in (persons or []):
+                cv2.rectangle(shot, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                cv2.putText(shot, f"person {conf:.2f}", (x1, max(y1 - 6, 12)),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
+            cv2.putText(shot, f"INTRUSION {stamp}", (10, 22),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            image = event_log.save_shot(shot, prefix="intrusion")
+            if image is None:
+                self.get_logger().warn("증거 사진 저장 실패", throttle_duration_sec=30.0)
+
         if not event_log.log_event(
                 "restricted_node", "alert", "작업금지 시간대 사람 발견",
-                person_count=n_person, db_path=str(self.get_parameter("db_path").value)):
+                person_count=n_person, image=image,
+                db_path=str(self.get_parameter("db_path").value)):
             self.get_logger().warn("이벤트 기록 실패(sqlite)", throttle_duration_sec=30.0)
         self.beep()
         self.speak()
@@ -355,9 +409,20 @@ class RestrictedNode(Node):
 
     def report(self):
         self.info(
-            f"수신 {self.n_frame}장, 제한시간={'예' if self.in_restricted_window() else '아니오'}, "
+            f"수신 {self.n_frame}장, 모드={self.get_parameter('mode').value}, "
+            f"감시중={'예' if self.in_restricted_window() else '아니오'}, "
             f"경고중={'예' if self.alerting else '아니오'}"
         )
+        # 경고가 없을 때도 대시보드가 "지금 감시 중인지 / 모드가 뭔지"를 알아야 하므로
+        # 주기적으로 현재 상태를 낸다(경고 중이면 raise_alert 가 이미 ALERT 를 낸다).
+        if not self.alerting:
+            mode = str(self.get_parameter("mode").value).lower()
+            watching = self.in_restricted_window()
+            self.status(
+                f"idle mode={mode} watching={'yes' if watching else 'no'} "
+                f"window={self.get_parameter('start_time').value}-"
+                f"{self.get_parameter('end_time').value}"
+            )
 
 
 def main():

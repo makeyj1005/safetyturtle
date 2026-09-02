@@ -13,6 +13,7 @@ Power BI 등 외부 분석 도구에서 바로 읽을 수 있도록 단순한 �
     detail        TEXT     사람이 읽는 설명
     person_count  INTEGER  해당 시점 감지된 사람 수 (없으면 NULL)
     zone          TEXT     구역 이름 (구역 제한 붙이기 전까지는 NULL)
+    image         TEXT     증거 사진 파일명 (logs/shots_web/ 안, 없으면 NULL)
 """
 import os
 import sqlite3
@@ -29,11 +30,16 @@ CREATE TABLE IF NOT EXISTS events (
     event_type    TEXT NOT NULL,
     detail        TEXT,
     person_count  INTEGER,
-    zone          TEXT
+    zone          TEXT,
+    image         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts_epoch);
 CREATE INDEX IF NOT EXISTS idx_events_node ON events(node);
 """
+
+# 증거 사진을 두는 곳. 대시보드가 이 폴더만 웹으로 서빙한다(다른 로그 폴더를
+# 통째로 노출하지 않으려고 따로 뒀다).
+SHOT_DIR = os.path.join(os.path.expanduser("~"), "vibe", "ex1", "logs", "shots_web")
 
 
 def _ensure_schema(db_path):
@@ -41,13 +47,18 @@ def _ensure_schema(db_path):
     con = sqlite3.connect(db_path, timeout=5.0)
     try:
         con.executescript(_SCHEMA)
+        # image 칸은 나중에 추가했다 — 이미 있는 DB 를 쓰던 사람도 그대로 쓰게
+        # 마이그레이션한다(2026-09-02). 없으면 붙이고, 있으면 조용히 넘어간다.
+        cols = {r[1] for r in con.execute("PRAGMA table_info(events)")}
+        if "image" not in cols:
+            con.execute("ALTER TABLE events ADD COLUMN image TEXT")
         con.commit()
     finally:
         con.close()
 
 
 def log_event(node, event_type, detail="", person_count=None, zone=None,
-             db_path=DEFAULT_DB):
+             image=None, db_path=DEFAULT_DB):
     """이벤트 한 줄을 기록한다. 실패해도 예외를 던지지 않는다(로깅 실패로 노드가
     죽으면 안 된다 — 호출부는 그냥 warn 로그만 남기고 계속 돈다)."""
     try:
@@ -58,8 +69,8 @@ def log_event(node, event_type, detail="", person_count=None, zone=None,
         try:
             con.execute(
                 "INSERT INTO events (ts, ts_epoch, node, event_type, detail, "
-                "person_count, zone) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (ts, now, node, event_type, detail, person_count, zone),
+                "person_count, zone, image) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (ts, now, node, event_type, detail, person_count, zone, image),
             )
             con.commit()
         finally:
@@ -67,3 +78,22 @@ def log_event(node, event_type, detail="", person_count=None, zone=None,
         return True
     except sqlite3.Error:
         return False
+
+
+def save_shot(frame, prefix="intrusion", shot_dir=SHOT_DIR):
+    """증거 사진을 저장하고 파일명을 돌려준다(실패하면 None).
+
+    cv2 를 이 모듈에서 import 하지 않으려고 프레임 인코딩은 호출부에서 하지 않고,
+    여기서 지연 import 한다 — event_log 는 원래 ROS·cv2 의존이 없는 순수 모듈이고
+    사진 저장은 부가 기능이라 필요할 때만 불러온다.
+    """
+    try:
+        import cv2
+        os.makedirs(shot_dir, exist_ok=True)
+        name = f"{prefix}_{time.strftime('%Y%m%d_%H%M%S', time.localtime())}.jpg"
+        path = os.path.join(shot_dir, name)
+        if cv2.imwrite(path, frame):
+            return name
+        return None
+    except Exception:                                          # noqa: BLE001
+        return None
