@@ -22,13 +22,39 @@ ROBOT="${ROBOT:-rpi@192.168.0.73}"
 EX1="$HOME/vibe/ex1"
 MAP="${MAP:-/home/rpi/vibe/ex1/maps/venue2_map.yaml}"
 
-# 웹캠 발행 fps. 원본 기본값은 3 이었다 — 무선이 병목이라 Nav2 주행 중에는
+# --- 웹캠(전면 USB) 화질 설정 ---
+# 원본 기본값은 640x480 / 3fps / jpeg50 이었다 — 무선이 병목이라 Nav2 주행 중에
 # /scan 이 밀리지 않게 낮게 잡은 값이다(HANDOFF 제약 5).
-# 지금은 Nav2 를 안 쓰는 시연 구성이라 8 로 올린다: 감지 판단이 3fps 에서 6초쯤
-# 걸려 "너무 느리다"는 피드백이 있었고, fps 를 올리면 같은 표본 수를 더 짧은
-# 시간에 모을 수 있다(helmet_node 의 judge_sec 주석과 짝을 이룬다).
-# ⚠️ Nav2 자율주행을 켤 때는 WEBCAM_FPS=3 으로 되돌릴 것.
-WEBCAM_FPS="${WEBCAM_FPS:-8.0}"
+# 지금은 Nav2 를 안 쓰는 시연 구성이고 CPU·GPU 에 여유가 많아서(2026-09-04 실측:
+# GPU 2%, 12코어 중 load 2.2) 올려 쓴다.
+#
+# [무엇이 실제로 좋아지는가 — 헛된 기대를 막기 위해]
+#   fps ↑     판단이 빨라진다. helmet_node 는 표본 N장을 모아 결론내므로
+#             fps 가 높으면 같은 표본을 더 짧은 시간에 모은다(judge_sec 과 짝).
+#   해상도 ↑  안전모 **색 판정**은 좋아진다(머리 영역 픽셀이 늘어난다).
+#             하지만 **사람 검출은 거의 안 좋아진다** — MobileNet-SSD 가 내부에서
+#             300x300 으로 줄여 처리하기 때문이다.
+#   화각      소프트웨어로 넓힐 수 없다(렌즈 성질). 다만 저해상도에서 센서를
+#             크롭하는 카메라라면 해상도를 올릴 때 넓어질 수 있다 — 실측 필요.
+#
+# ⚠️ 무선이 이 프로젝트의 병목이다. 올린 뒤 반드시 확인할 것:
+#      ros2 topic hz /scan        (라이다가 밀리면 안전기능·Nav2 가 무너진다)
+#      ros2 topic hz /webcam/image_raw/compressed
+#    /scan 이 흔들리면 fps 나 해상도를 되돌린다.
+# ⚠️ Nav2 자율주행을 켤 때는 원본값(3fps / 640x480 / jpeg50)으로 되돌릴 것.
+WEBCAM_FPS="${WEBCAM_FPS:-15.0}"
+WEBCAM_W="${WEBCAM_W:-1280}"
+WEBCAM_H="${WEBCAM_H:-720}"
+WEBCAM_JPEG="${WEBCAM_JPEG:-70}"
+
+# --- CSI(후면) 화질 ---
+# 압력계 판정은 해상도가 결정적이다: 70cm 거리에서 640x480 이면 게이지가 19px 로
+# 바늘을 볼 수 없고, 1640x1232 면 약 48px 이 되어 판정이 가능하다.
+# 게다가 gauge.judge 는 캘리브레이션 해상도와 다르면 아예 판정을 거부한다.
+# 1640x1232 는 CMA 메모리 상한이기도 하다(그 위는 "Cannot allocate memory").
+CSI_W="${CSI_W:-1640}"
+CSI_H="${CSI_H:-1232}"
+CSI_FPS="${CSI_FPS:-5}"
 SSH_OPTS=(-o ConnectTimeout=8 -o BatchMode=yes -o StrictHostKeyChecking=accept-new)
 
 # 컨테이너 공통 옵션.
@@ -123,15 +149,16 @@ for n in "${ROBOT_NODES[@]}"; do
     if ssh "${SSH_OPTS[@]}" "$ROBOT" "pgrep -f '[${n:0:1}]${n:1}\.py' >/dev/null"; then
         ok "$n (이미 실행 중)"
     else
-        # 웹캠만 fps 를 넘긴다(위 WEBCAM_FPS 주석 참고). 나머지는 인자가 없다.
+        # 웹캠만 화질 인자를 넘긴다(위 주석 참고). 나머지는 인자가 없다.
         args=""
-        [ "$n" = "webcam_node" ] && args="--ros-args -p fps:=$WEBCAM_FPS"
+        [ "$n" = "webcam_node" ] && args="--ros-args -p fps:=$WEBCAM_FPS \
+            -p width:=$WEBCAM_W -p height:=$WEBCAM_H -p jpeg_quality:=$WEBCAM_JPEG"
         ssh "${SSH_OPTS[@]}" "$ROBOT" "
             export ROS_DOMAIN_ID=3
             source /opt/ros/humble/setup.bash
             ( setsid nohup python3 -u ~/launch/$n.py $args > ~/$n.log 2>&1 < /dev/null & )" \
             >/dev/null 2>&1
-        ok "$n${args:+ (fps=$WEBCAM_FPS)}"
+        ok "$n${args:+ (${WEBCAM_W}x${WEBCAM_H} @${WEBCAM_FPS}fps jpeg${WEBCAM_JPEG})}"
     fi
 done
 
@@ -179,11 +206,14 @@ run_node helmet_node cpu \
 
 run_node extinguisher_node cpu "ros2 run patrol_core extinguisher_expiry_node"
 
-# --- 후면(CSI) 안전모 감시 + 소화기 점검 ---
-# CSI 카메라가 떠 있어야 의미가 있다. 로봇에서: ~/launch/csi_camera.sh
+# --- 후면(CSI) 카메라 + 안전모 감시 + 소화기 점검 ---
 # [왜 후면도 보는가] 앞에서만 안전모를 쓰고 로봇이 지나가면 벗는 경우를 잡으려고.
 # 앞 인스턴스와 이름·상태토픽·사진접두어·DB이름을 모두 다르게 준다(절대 규칙 7).
 if [ "$WITH_REAR" = "1" ]; then
+    say "로봇 CSI 카메라 (후면)"
+    ssh "${SSH_OPTS[@]}" "$ROBOT" \
+        "~/launch/csi_camera.sh $CSI_W $CSI_H $CSI_FPS" 2>&1 | sed 's/^/  /'
+
     run_node helmet_rear_node cpu \
         "ros2 run patrol_core helmet_node --ros-args -r __node:=helmet_node_rear \
          -p topic:=/csi/image_raw/compressed -p method:=color \

@@ -198,6 +198,76 @@ class DashboardNode(Node):
         self.send_mode("auto" if on else "off")
 
 
+# CPU 사용률은 누적값의 차이로 구해야 한다 — /proc/stat 은 부팅 후 누적 시간이라
+# 한 번만 읽으면 "부팅 후 평균"이 나온다. 이전 값을 들고 있다가 차이를 본다.
+_cpu_prev = {"total": 0, "idle": 0}
+
+# GPU 사용률 파일. 카드 번호는 기계마다 다를 수 있어 처음 한 번 찾아 둔다
+# (이 노트북은 card1 = Radeon iGPU).
+def _find_gpu_file():
+    import glob
+    for path in sorted(glob.glob("/sys/class/drm/card*/device/gpu_busy_percent")):
+        try:
+            with open(path) as f:
+                int(f.read().strip())
+            return path
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+_GPU_FILE = _find_gpu_file()
+
+
+def read_resources():
+    """호스트의 CPU·GPU·메모리 사용률. 컨테이너 안에서도 /proc·/sys 로 호스트 값이 보인다."""
+    out = {"cpu": None, "gpu": None, "mem": None, "cores": None, "load": None}
+
+    # CPU — /proc/stat 첫 줄의 누적 지터를 이전 호출과 비교한다
+    try:
+        with open("/proc/stat") as f:
+            parts = f.readline().split()
+        vals = [int(v) for v in parts[1:]]
+        total = sum(vals)
+        idle = vals[3] + (vals[4] if len(vals) > 4 else 0)   # idle + iowait
+        dt = total - _cpu_prev["total"]
+        di = idle - _cpu_prev["idle"]
+        if _cpu_prev["total"] and dt > 0:
+            out["cpu"] = max(0.0, min(100.0, 100.0 * (dt - di) / dt))
+        _cpu_prev["total"], _cpu_prev["idle"] = total, idle
+    except (OSError, ValueError, IndexError):
+        pass
+
+    if _GPU_FILE:
+        try:
+            with open(_GPU_FILE) as f:
+                out["gpu"] = float(f.read().strip())
+        except (OSError, ValueError):
+            pass
+
+    try:
+        info = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                k, _, v = line.partition(":")
+                info[k] = int(v.split()[0])
+        tot = info.get("MemTotal", 0)
+        avail = info.get("MemAvailable", 0)
+        if tot:
+            out["mem"] = 100.0 * (tot - avail) / tot
+            out["mem_total_gb"] = tot / 1024.0 / 1024.0
+    except (OSError, ValueError, IndexError):
+        pass
+
+    try:
+        out["cores"] = os.cpu_count()
+        with open("/proc/loadavg") as f:
+            out["load"] = float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        pass
+    return out
+
+
 def build_status():
     """대시보드가 화면을 그리는 데 필요한 모든 상태를 한 번에 모아 준다.
 
@@ -276,6 +346,7 @@ def build_status():
                    "blocked": fresh("safety")
                               and snap["safety_status"].startswith("blocked")},
         "camera_age_sec": age("frame"),
+        "res": read_resources(),
     }
 
 
@@ -369,6 +440,19 @@ PAGE_TMPL = """<!doctype html>
   header h1 { margin: 0; font-size: 17px; letter-spacing: -0.2px; }
   header .clock { font-variant-numeric: tabular-nums; opacity: 0.75; font-size: 14px; }
   .hdrright { display: flex; align-items: center; gap: 10px; }
+  /* 자원 사용량 게이지 — 숫자만 있으면 눈에 안 들어와서 막대를 같이 둔다 */
+  .res { display: flex; gap: 12px; margin-right: 6px; }
+  .resitem { display: flex; align-items: center; gap: 5px; font-size: 11px; }
+  .reslabel { opacity: 0.6; letter-spacing: 0.5px; }
+  .bar { display: inline-block; width: 52px; height: 7px; border-radius: 4px;
+         background: rgba(255,255,255,0.18); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0%; background: #3fb950;
+           transition: width 0.4s, background 0.4s; }
+  .bar i.mid { background: #d29922; }
+  .bar i.hot { background: #f85149; }
+  .resval { font-variant-numeric: tabular-nums; width: 30px; text-align: right; }
+  @media (max-width: 900px) { .res { display: none; } }
+
   .bigbtn { padding: 9px 16px; border: none; border-radius: 8px; cursor: pointer;
             font-size: 14px; font-weight: 700; }
   .bigbtn.go { background: #1a7f37; color: #fff; }
@@ -434,6 +518,21 @@ PAGE_TMPL = """<!doctype html>
   .shot img { width: 100%; display: block; cursor: pointer; }
   .shot .cap { font-size: 11px; padding: 6px 7px; color: #57606a; }
 
+  /* 이벤트 필터 — 기록이 쌓이면 눈으로 훑기 어려워서 구분·검색을 둔다 */
+  .filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+             margin-bottom: 10px; }
+  .chip { padding: 5px 11px; border: 1px solid #d0d7de; background: #f6f8fa;
+          border-radius: 99px; cursor: pointer; font-size: 12px; }
+  .chip.active { background: #16191d; color: #fff; border-color: #16191d; }
+  .search { flex: 1; min-width: 130px; padding: 6px 10px; border: 1px solid #d0d7de;
+            border-radius: 7px; font-size: 12px; }
+  .evcount { font-size: 12px; color: #57606a; }
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: #16191d; }
+  .arrow { font-size: 9px; opacity: 0.7; }
+  .kindtag { display: inline-block; padding: 2px 7px; border-radius: 99px;
+             font-size: 11px; font-weight: 600; white-space: nowrap; }
+
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; }
   th { color: #57606a; font-weight: 600; }
@@ -450,6 +549,14 @@ PAGE_TMPL = """<!doctype html>
 <header>
   <h1>순찰 로봇 관제</h1>
   <div class="hdrright">
+    <div class="res" id="resbox">
+      <div class="resitem"><span class="reslabel">CPU</span>
+        <span class="bar"><i id="bar-cpu"></i></span><span class="resval" id="v-cpu">–</span></div>
+      <div class="resitem"><span class="reslabel">GPU</span>
+        <span class="bar"><i id="bar-gpu"></i></span><span class="resval" id="v-gpu">–</span></div>
+      <div class="resitem"><span class="reslabel">MEM</span>
+        <span class="bar"><i id="bar-mem"></i></span><span class="resval" id="v-mem">–</span></div>
+    </div>
     <button id="startall" class="bigbtn go">▶ 전체 시동</button>
     <button id="stopall" class="bigbtn stop">■ 전체 정지</button>
     <div class="clock" id="clock">--:--:--</div>
@@ -573,9 +680,26 @@ PAGE_TMPL = """<!doctype html>
 
   <div class="card wide">
     <h2>이벤트 기록</h2>
+    <div class="filters">
+      <button class="chip active" data-f="all">전체</button>
+      <button class="chip" data-f="fire">🔥 화재</button>
+      <button class="chip" data-f="intrusion">🚷 침입</button>
+      <button class="chip" data-f="helmet">⛑️ 안전모(전면)</button>
+      <button class="chip" data-f="helmet_rear">🔄 안전모(후면)</button>
+      <button class="chip" data-f="extinguisher">🧯 소화기</button>
+      <button class="chip" data-f="photo">📷 사진 있는 것만</button>
+      <input id="evsearch" class="search" placeholder="내용 검색...">
+      <span class="evcount" id="evcount"></span>
+    </div>
     <table>
-      <thead><tr><th>시각</th><th>노드</th><th>종류</th><th>내용</th><th>인원</th><th>사진</th></tr></thead>
-      <tbody id="eventsbody"><tr><td colspan="6">불러오는 중...</td></tr></tbody>
+      <thead><tr>
+        <th class="sortable" data-k="ts">시각 <span class="arrow">▼</span></th>
+        <th class="sortable" data-k="kind">구분 <span class="arrow"></span></th>
+        <th>내용</th>
+        <th class="sortable" data-k="person_count">인원 <span class="arrow"></span></th>
+        <th>사진</th>
+      </tr></thead>
+      <tbody id="eventsbody"><tr><td colspan="5">불러오는 중...</td></tr></tbody>
     </table>
   </div>
 </div>
@@ -672,6 +796,26 @@ function refreshStatus() {
       sh.innerHTML = '<span class="badge off">✓ 진행 방향 안전</span>';
     }
 
+    // 자원 사용량 — 60% 넘으면 주황, 85% 넘으면 빨강
+    function setBar(id, vid, val) {
+      const bar = document.getElementById(id), lab = document.getElementById(vid);
+      if (val === null || val === undefined) {
+        bar.style.width = '0%'; lab.textContent = '–'; return;
+      }
+      bar.style.width = Math.max(2, Math.min(100, val)) + '%';
+      bar.className = val >= 85 ? 'hot' : (val >= 60 ? 'mid' : '');
+      lab.textContent = val.toFixed(0) + '%';
+    }
+    const r = d.res || {};
+    setBar('bar-cpu', 'v-cpu', r.cpu);
+    setBar('bar-gpu', 'v-gpu', r.gpu);
+    setBar('bar-mem', 'v-mem', r.mem);
+    const rb = document.getElementById('resbox');
+    if (rb) {
+      rb.title = 'CPU ' + (r.cores || '?') + '코어, load ' + (r.load ?? '?') +
+                 (r.mem_total_gb ? (' / 메모리 ' + r.mem_total_gb.toFixed(1) + 'GB') : '');
+    }
+
     document.getElementById('extstatus').textContent = d.extinguisher.text;
     document.getElementById('inspstatus').textContent =
       (d.inspect && d.inspect.age_sec >= 0) ? d.inspect.text : '점검 노드 미실행';
@@ -737,21 +881,101 @@ function refreshInspections() {
   }).catch(() => {});
 }
 
+// ---------------- 이벤트 기록: 구분·검색·정렬 ----------------
+// 노드 이름(restricted_node 등)은 사람이 훑기 어려워서 보기 좋은 구분으로 바꾼다.
+const KINDS = {
+  fire_node:        {key: 'fire',        label: '🔥 화재',           bg: '#ffe3e3', fg: '#8b0f16'},
+  restricted_node:  {key: 'intrusion',   label: '🚷 침입',           bg: '#fff4e0', fg: '#8a4b00'},
+  helmet_node:      {key: 'helmet',      label: '⛑️ 안전모(전면)',   bg: '#fff8dc', fg: '#7a5c00'},
+  helmet_node_rear: {key: 'helmet_rear', label: '🔄 안전모(후면)',   bg: '#eef4ff', fg: '#1f3f8a'},
+  extinguisher_expiry_node:  {key: 'extinguisher', label: '🧯 소화기 기한', bg: '#eaf7ee', fg: '#14532d'},
+  extinguisher_inspect_node: {key: 'extinguisher', label: '🧯 소화기 점검', bg: '#eaf7ee', fg: '#14532d'},
+};
+function kindOf(node) {
+  return KINDS[node] || {key: 'etc', label: node, bg: '#eaeef2', fg: '#57606a'};
+}
+
+let evAll = [];            // 서버에서 받은 전체 기록
+let evFilter = 'all';
+let evSort = {key: 'ts', desc: true};
+
+function renderEvents() {
+  const body = document.getElementById('eventsbody');
+  const q = (document.getElementById('evsearch').value || '').trim().toLowerCase();
+
+  let rows = evAll.filter(r => {
+    const k = kindOf(r.node);
+    if (evFilter === 'photo') { if (!r.image) return false; }
+    else if (evFilter !== 'all' && k.key !== evFilter) return false;
+    if (q) {
+      const hay = (r.ts + ' ' + k.label + ' ' + (r.detail || '') + ' ' +
+                   (r.event_type || '')).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  rows.sort((a, b) => {
+    let x, y;
+    if (evSort.key === 'kind') { x = kindOf(a.node).label; y = kindOf(b.node).label; }
+    else if (evSort.key === 'person_count') {
+      x = a.person_count ?? -1; y = b.person_count ?? -1;
+    } else { x = a.ts; y = b.ts; }
+    if (x < y) return evSort.desc ? 1 : -1;
+    if (x > y) return evSort.desc ? -1 : 1;
+    return 0;
+  });
+
+  document.getElementById('evcount').textContent =
+    rows.length + ' / ' + evAll.length + '건';
+
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="5">해당하는 기록이 없습니다</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(r => {
+    const k = kindOf(r.node);
+    const tag = '<span class="kindtag" style="background:' + k.bg + ';color:' + k.fg +
+                '">' + k.label + '</span>';
+    const thumb = r.image
+      ? '<td class="thumb"><img src="/photo/' + encodeURIComponent(r.image) +
+        '" onclick="showPhoto(this.src)"></td>'
+      : '<td></td>';
+    return '<tr><td>' + r.ts + '</td><td>' + tag + '</td><td>' +
+           (r.detail || r.event_type || '') + '</td><td>' +
+           (r.person_count ?? '') + '</td>' + thumb + '</tr>';
+  }).join('');
+}
+
 function refreshEvents() {
   fetch('/api/events').then(r => r.json()).then(rows => {
-    const body = document.getElementById('eventsbody');
-    if (!rows.length) { body.innerHTML = '<tr><td colspan="6">기록 없음</td></tr>'; return; }
-    body.innerHTML = rows.map(r => {
-      const thumb = r.image
-        ? '<td class="thumb"><img src="/photo/' + encodeURIComponent(r.image) +
-          '" onclick="showPhoto(this.src)"></td>'
-        : '<td></td>';
-      return '<tr><td>' + r.ts + '</td><td>' + r.node + '</td><td>' + r.event_type +
-             '</td><td>' + (r.detail || '') + '</td><td>' + (r.person_count ?? '') +
-             '</td>' + thumb + '</tr>';
-    }).join('');
+    evAll = rows;
+    renderEvents();
   }).catch(() => {});
 }
+
+// 구분 버튼
+document.querySelectorAll('.chip[data-f]').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.chip[data-f]').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    evFilter = b.dataset.f;
+    renderEvents();
+  });
+});
+// 검색
+document.getElementById('evsearch').addEventListener('input', renderEvents);
+// 열 제목 클릭 정렬
+document.querySelectorAll('th.sortable').forEach(th => {
+  th.addEventListener('click', () => {
+    const k = th.dataset.k;
+    // 같은 열을 다시 누르면 오름/내림을 뒤집는다
+    evSort = (evSort.key === k) ? {key: k, desc: !evSort.desc} : {key: k, desc: true};
+    document.querySelectorAll('th.sortable .arrow').forEach(a => a.textContent = '');
+    th.querySelector('.arrow').textContent = evSort.desc ? '▼' : '▲';
+    renderEvents();
+  });
+});
 
 // ---------------- 사진 크게 보기 ----------------
 function showPhoto(src) {
@@ -903,7 +1127,7 @@ class Handler(BaseHTTPRequestHandler):
             body = json.dumps(build_status()).encode("utf-8")
             self._send(200, "application/json", body)
         elif self.path.startswith("/api/events"):
-            body = json.dumps(fetch_events()).encode("utf-8")
+            body = json.dumps(fetch_events(limit=300)).encode("utf-8")
             self._send(200, "application/json", body)
         elif self.path.startswith("/api/inspections"):
             body = json.dumps(fetch_inspections()).encode("utf-8")
