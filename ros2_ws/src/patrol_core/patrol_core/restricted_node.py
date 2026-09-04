@@ -144,7 +144,10 @@ class RestrictedNode(Node):
             + (" (테스트: 항상 제한시간으로 취급)"
                if bool(self.get_parameter("always_restricted").value) else "")
         )
-        self.create_timer(10.0, self.report)
+        self.create_timer(10.0, self.report)         # 콘솔 요약 (사람이 읽는 용도)
+        # 대시보드용 상태는 따로 빠르게 낸다 — report() 를 3초로 줄이면 콘솔이
+        # 도배되고, 10초로 두면 웹 버튼 반응이 느려 보인다. 그래서 분리했다.
+        self.create_timer(2.0, self.status_tick)
 
     # ---------------- 준비 (helmet_node.setup_detector 와 동일한 방식) ----------------
     def setup_detector(self):
@@ -267,6 +270,9 @@ class RestrictedNode(Node):
         # 감시를 끄면 켜져 있던 경고도 함께 내린다(화면에 남아 오해하지 않게).
         if want == "off" and self.alerting:
             self.clear_alert("감시 모드 off")
+        # 바뀐 상태를 **즉시** 낸다. 안 그러면 10초 주기의 report() 를 기다려야 해서
+        # 웹에서 버튼을 눌러도 한참 반응이 없는 것처럼 보인다(2026-09-04 피드백).
+        self.publish_idle_status()
 
     # ---------------- 프레임 처리 ----------------
     def on_frame(self, msg: CompressedImage):
@@ -413,16 +419,21 @@ class RestrictedNode(Node):
             f"감시중={'예' if self.in_restricted_window() else '아니오'}, "
             f"경고중={'예' if self.alerting else '아니오'}"
         )
-        # 경고가 없을 때도 대시보드가 "지금 감시 중인지 / 모드가 뭔지"를 알아야 하므로
-        # 주기적으로 현재 상태를 낸다(경고 중이면 raise_alert 가 이미 ALERT 를 낸다).
+    def status_tick(self):
+        """대시보드용 상태 발행(2초 주기). 경고 중이면 raise_alert 가 ALERT 를 내므로
+        건드리지 않는다 — 여기서 덮어쓰면 경고가 화면에서 깜빡인다."""
         if not self.alerting:
-            mode = str(self.get_parameter("mode").value).lower()
-            watching = self.in_restricted_window()
-            self.status(
-                f"idle mode={mode} watching={'yes' if watching else 'no'} "
-                f"window={self.get_parameter('start_time').value}-"
-                f"{self.get_parameter('end_time').value}"
-            )
+            self.publish_idle_status()
+
+    def publish_idle_status(self):
+        """모드·감시여부·시간창을 대시보드가 파싱할 수 있는 형태로 낸다."""
+        mode = str(self.get_parameter("mode").value).lower()
+        watching = self.in_restricted_window()
+        self.status(
+            f"idle mode={mode} watching={'yes' if watching else 'no'} "
+            f"window={self.get_parameter('start_time').value}-"
+            f"{self.get_parameter('end_time').value}"
+        )
 
 
 def main():

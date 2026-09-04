@@ -35,6 +35,27 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts_epoch);
 CREATE INDEX IF NOT EXISTS idx_events_node ON events(node);
+
+-- 소화기 점검 기록. events 와 따로 두는 이유: events 는 "경고가 났다"는 사건
+-- 흐름이고, 이쪽은 "언제 무엇을 점검해서 어떤 판정이 나왔다"는 대장이다.
+-- 웹에서 소화기별 최근 점검 이력을 보여주고, 나중에 Power BI 로 점검 주기를
+-- 분석하려면 한 줄이 한 번의 점검이어야 한다.
+CREATE TABLE IF NOT EXISTS inspections (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT NOT NULL,
+    ts_epoch    REAL NOT NULL,
+    name        TEXT NOT NULL,   -- 소화기 이름 (extinguisher_info.yaml 의 name)
+    qr_id       TEXT,            -- QR 로 읽은 식별자
+    verdict     TEXT NOT NULL,   -- 정상 | 이상 | 판정불가 | 부재
+    detail      TEXT,            -- 판정 근거(변화량·정합점수 등)
+    mfg_date    TEXT,            -- 그 시점 대장의 제조년월
+    expiry_date TEXT,            -- 그 시점 대장의 교체년월
+    manager     TEXT,            -- 책임자
+    days_left   INTEGER,         -- 교체년월까지 남은 일수(음수면 지남)
+    image       TEXT             -- 점검 사진 파일명 (logs/shots_web/)
+);
+CREATE INDEX IF NOT EXISTS idx_insp_ts ON inspections(ts_epoch);
+CREATE INDEX IF NOT EXISTS idx_insp_name ON inspections(name);
 """
 
 # 증거 사진을 두는 곳. 대시보드가 이 폴더만 웹으로 서빙한다(다른 로그 폴더를
@@ -71,6 +92,31 @@ def log_event(node, event_type, detail="", person_count=None, zone=None,
                 "INSERT INTO events (ts, ts_epoch, node, event_type, detail, "
                 "person_count, zone, image) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (ts, now, node, event_type, detail, person_count, zone, image),
+            )
+            con.commit()
+        finally:
+            con.close()
+        return True
+    except sqlite3.Error:
+        return False
+
+
+def log_inspection(name, verdict, qr_id=None, detail="", mfg_date=None,
+                  expiry_date=None, manager=None, days_left=None, image=None,
+                  db_path=DEFAULT_DB):
+    """소화기 점검 한 건을 기록한다. 실패해도 예외를 던지지 않는다(log_event 와 같은 정책)."""
+    try:
+        _ensure_schema(db_path)
+        now = time.time()
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now))
+        con = sqlite3.connect(db_path, timeout=5.0)
+        try:
+            con.execute(
+                "INSERT INTO inspections (ts, ts_epoch, name, qr_id, verdict, detail, "
+                "mfg_date, expiry_date, manager, days_left, image) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (ts, now, name, qr_id, verdict, detail, mfg_date, expiry_date,
+                 manager, days_left, image),
             )
             con.commit()
         finally:

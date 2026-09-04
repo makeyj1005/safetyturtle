@@ -49,6 +49,11 @@ SCREENS = {
     "idle":      ("PATROL ACTIVE", "AREA IS SECURE"),
 }
 
+# 소화기 점검 결과는 내용이 매번 달라서 SCREENS 에 못 넣는다 — 받은 정보로
+# 두 줄을 만들어 번갈아 보여준다(16x2 에 제조년월·교체년월·책임자가 다 안 들어간다).
+INSPECT_HOLD_SEC = 12.0     # 점검 화면을 이만큼 유지한다
+INSPECT_PAGE_SEC = 3.0      # 이 간격으로 다음 페이지로 넘긴다
+
 # 상태가 이 시간(초) 동안 갱신되지 않으면 그 경고는 끝난 것으로 본다.
 # 각 노드가 상태를 주기적으로 내지 않고 "바뀔 때만" 내는 경우가 있어서,
 # 화면이 옛 경고에 영원히 붙어있지 않게 하는 안전장치다.
@@ -84,10 +89,14 @@ class LcdNode(Node):
         self.create_subscription(String, "/fire/status", self.on_fire, qos)
         self.create_subscription(String, "/restricted/status", self.on_restricted, qos)
         self.create_subscription(String, "/helmet/status", self.on_helmet, qos)
+        self.create_subscription(String, "/extinguisher/inspect_status",
+                                 self.on_inspect, qos)
 
         self.fire_at = 0.0
         self.intrusion_at = 0.0
         self.helmet_at = 0.0
+        self.inspect_at = 0.0
+        self.inspect_pages = []     # 점검 결과를 보여줄 (1줄, 2줄) 목록
         self.shown = None
 
         self.create_timer(float(self.get_parameter("refresh_sec").value), self.refresh)
@@ -114,6 +123,44 @@ class LcdNode(Node):
         else:
             self.helmet_at = 0.0
 
+    def on_inspect(self, msg: String):
+        """소화기 점검 결과를 받아 LCD 페이지로 만든다.
+
+        extinguisher_inspect_node 가 내는 형식:
+          "점검 <이름> verdict=.. qr=.. mfg=.. exp=.. mgr=.. days_left=.."
+        점검이 아닌 상태 문구("대기 — ...")는 무시한다.
+        """
+        text = msg.data
+        if not text.startswith("점검 "):
+            return
+        f = {}
+        for tok in text.split():
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                f[k] = v
+
+        def ascii_only(s, limit=16):
+            # HD44780 LCD 에 한글 폰트가 없다 — 로마자·숫자만 남긴다.
+            return s.encode("ascii", "ignore").decode()[:limit]
+
+        verdict = f.get("verdict", "?")
+        # 판정만 로마자로 바꿔 보여준다(한글은 LCD 에서 깨진다)
+        vmap = {"정상": "OK", "이상": "ABNORMAL", "판정불가": "CANNOT JUDGE",
+                "부재": "MISSING"}
+        pages = [
+            ("EXTINGUISHER", f"GAUGE: {vmap.get(verdict, '?')}"),
+            ("MFG / EXP", ascii_only(f"{f.get('mfg','?')} {f.get('exp','?')}")),
+        ]
+        days = f.get("days_left")
+        if days and days != "?":
+            pages.append(("REPLACE IN", f"{days} DAYS"))
+        mgr = ascii_only(f.get("mgr", ""))
+        # 책임자 이름이 한글이면 로마자로 남는 게 없다 — 그럴 때는 이 페이지를 뺀다
+        # (빈 줄만 나오면 LCD 가 고장난 것처럼 보인다). 웹에는 한글로 제대로 나온다.
+        pages.append(("MANAGER", mgr if mgr.strip() else "SEE WEB"))
+        self.inspect_pages = pages
+        self.inspect_at = time.time()
+
     # ---------------- 화면 갱신 ----------------
     def pick_screen(self):
         now = time.time()
@@ -127,10 +174,30 @@ class LcdNode(Node):
             return "helmet"
         if fresh(self.intrusion_at):
             return "intrusion"
+        # 점검 결과는 경고보다 낮은 우선순위 — 화재 중에 소화기 정보를 띄우면 안 된다.
+        if self.inspect_pages and (now - self.inspect_at) < INSPECT_HOLD_SEC:
+            return "inspect"
         return "idle"
 
     def refresh(self):
         key = self.pick_screen()
+
+        if key == "inspect":
+            # 여러 페이지를 번갈아 보여준다(16x2 에 다 안 들어간다).
+            elapsed = time.time() - self.inspect_at
+            idx = int(elapsed // INSPECT_PAGE_SEC) % len(self.inspect_pages)
+            line1, line2 = self.inspect_pages[idx]
+            tag = f"inspect:{idx}"
+            if tag == self.shown:
+                return
+            self.lcd.clear()
+            self.lcd.write_string(line1[:16])
+            self.lcd.crlf()
+            self.lcd.write_string(line2[:16])
+            self.shown = tag
+            self.get_logger().info(f"LCD -> [{tag}] {line1} / {line2}")
+            return
+
         if key == self.shown:
             return                  # 같은 화면이면 다시 쓰지 않는다(깜빡임 방지)
         line1, line2 = SCREENS[key]

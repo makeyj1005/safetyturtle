@@ -60,6 +60,14 @@ state = {
     "helmet_at": 0.0,
     "extinguisher_status": "(아직 없음)",
     "extinguisher_at": 0.0,
+    "speaker_status": "(아직 없음)",
+    "speaker_at": 0.0,
+    "inspect_status": "(아직 없음)",
+    "inspect_at": 0.0,
+    "safety_status": "(아직 없음)",
+    "safety_at": 0.0,
+    "helmet_rear_status": "(아직 없음)",
+    "helmet_rear_at": 0.0,
 }
 
 # 상태가 이 시간(초) 넘게 갱신되지 않으면 "그 경고는 끝났다"고 본다.
@@ -84,6 +92,20 @@ class DashboardNode(Node):
         self.pub_mode = self.create_publisher(String, "/restricted/mode", qos)
         # 화재 시연/수동 해제용
         self.pub_fire_trigger = self.create_publisher(Bool, "/fire/trigger", qos)
+        # 감지 기능 켜고 끄기 (작업자가 웹에서 직접)
+        self.pub_fire_enable = self.create_publisher(Bool, "/fire/enable", qos)
+        self.pub_helmet_enable = self.create_publisher(Bool, "/helmet/enable", qos)
+        self.pub_speaker_enable = self.create_publisher(Bool, "/speaker/enable", qos)
+        self.create_subscription(String, "/speaker/status", self.on_speaker, qos)
+        self.create_subscription(String, "/extinguisher/inspect_status",
+                                 self.on_inspect, qos)
+        # 웹 "지금 점검" 버튼 -> extinguisher_inspect_node
+        self.pub_inspect = self.create_publisher(Bool, "/extinguisher/inspect", qos)
+        # 라이다 충돌 방지 상태 (cmd_vel_mux 가 낸다)
+        self.create_subscription(String, "/mux/safety", self.on_safety, qos)
+        # 후면(CSI) 안전모 감시 — 앞에서만 쓰고 지나면 벗는 경우를 잡는 두 번째 인스턴스
+        self.create_subscription(String, "/helmet_rear/status",
+                                 self.on_helmet_rear, qos)
 
     def on_frame(self, msg):
         with state_lock:
@@ -110,6 +132,31 @@ class DashboardNode(Node):
             state["extinguisher_status"] = msg.data
             state["extinguisher_at"] = time.time()
 
+    def on_speaker(self, msg):
+        with state_lock:
+            state["speaker_status"] = msg.data
+            state["speaker_at"] = time.time()
+
+    def on_inspect(self, msg):
+        with state_lock:
+            state["inspect_status"] = msg.data
+            state["inspect_at"] = time.time()
+
+    def on_helmet_rear(self, msg):
+        with state_lock:
+            state["helmet_rear_status"] = msg.data
+            state["helmet_rear_at"] = time.time()
+
+    def on_safety(self, msg):
+        with state_lock:
+            state["safety_status"] = msg.data
+            state["safety_at"] = time.time()
+
+    def send_inspect_now(self):
+        m = Bool()
+        m.data = True
+        self.pub_inspect.publish(m)
+
     def send_teleop(self, linear, angular):
         t = Twist()
         t.linear.x = max(-MAX_LINEAR, min(float(linear), MAX_LINEAR))
@@ -125,6 +172,30 @@ class DashboardNode(Node):
         m = Bool()
         m.data = bool(on)
         self.pub_fire_trigger.publish(m)
+
+    def send_enable(self, what, on):
+        m = Bool()
+        m.data = bool(on)
+        if what == "fire":
+            self.pub_fire_enable.publish(m)
+        elif what == "helmet":
+            self.pub_helmet_enable.publish(m)
+        elif what == "speaker":
+            self.pub_speaker_enable.publish(m)
+
+    def send_start_all(self, on):
+        """감지 기능을 한꺼번에 켜거나 끈다(시동 / 전체 정지).
+
+        노드(프로세스)를 띄우는 게 아니라 이미 떠 있는 노드의 감지를 켜고 끄는 것이다.
+        프로세스까지 한 번에 띄우려면 tools/start_all.sh 를 쓴다 — 대시보드는
+        컨테이너 안에서 돌아 도커·ssh 를 건드릴 수 없기 때문이다.
+        """
+        self.send_enable("fire", on)
+        self.send_enable("helmet", on)
+        self.send_enable("speaker", on)      # 시동하면 스피커도 함께 켠다
+        # 작업금지구역은 켤 때 시간표(auto)로 돌려놓는다 — 강제 감시(on)로 켜면
+        # 낮에도 계속 경고가 나서 작업자가 놀란다.
+        self.send_mode("auto" if on else "off")
 
 
 def build_status():
@@ -152,7 +223,27 @@ def build_status():
     # 각 노드의 상태 문구에서 "지금 경고 중인가"를 뽑는다.
     fire_alert = fresh("fire") and "FIRE" in fire_txt.upper()
     intrusion_alert = fresh("restricted") and "ALERT" in restricted_txt.upper()
-    helmet_alert = fresh("helmet") and helmet_txt.startswith("hold")
+    helmet_alert = fresh("helmet") and (
+        helmet_txt.startswith("hold") or "미착용" in helmet_txt)
+
+    def enabled_of(txt, alive):
+        """노드가 내는 "idle enabled=yes" 에서 켜짐 여부를 뽑는다.
+        노드 자체가 안 떠 있으면(신호 없음) None — 화면에서 "노드 없음"으로 구분한다."""
+        if not alive:
+            return None
+        if "enabled=yes" in txt:
+            return True
+        if "enabled=no" in txt or txt == "disabled":
+            return False
+        return True      # 경보 중이면 enabled 문구가 없다 — 켜져 있는 것이다
+
+    fire_enabled = enabled_of(fire_txt, fresh("fire"))
+    helmet_enabled = enabled_of(helmet_txt, fresh("helmet"))
+    speaker_enabled = enabled_of(snap["speaker_status"], fresh("speaker"))
+
+    rear_txt = snap["helmet_rear_status"]
+    helmet_rear_alert = fresh("helmet_rear") and (
+        rear_txt.startswith("hold") or "미착용" in rear_txt)
 
     # restricted_node 가 idle 일 때 내는 "idle mode=auto watching=yes window=00:00-06:00"
     # 에서 모드·감시여부를 뽑아 화면에 보여준다(작업자가 지금 설정을 알 수 있게).
@@ -167,29 +258,48 @@ def build_status():
 
     return {
         "now": time.strftime("%H:%M:%S", time.localtime(now)),
-        "fire": {"alert": fire_alert, "text": fire_txt, "age_sec": age("fire")},
+        "fire": {"alert": fire_alert, "text": fire_txt, "age_sec": age("fire"),
+                 "enabled": fire_enabled},
         "intrusion": {"alert": intrusion_alert, "text": restricted_txt,
                       "age_sec": age("restricted"), "mode": mode,
                       "watching": watching, "window": window},
-        "helmet": {"alert": helmet_alert, "text": helmet_txt, "age_sec": age("helmet")},
+        "helmet": {"alert": helmet_alert, "text": helmet_txt, "age_sec": age("helmet"),
+                   "enabled": helmet_enabled},
+        "helmet_rear": {"alert": helmet_rear_alert, "text": rear_txt,
+                        "age_sec": age("helmet_rear")},
         "extinguisher": {"text": snap["extinguisher_status"],
                          "age_sec": age("extinguisher")},
+        "speaker": {"text": snap["speaker_status"], "age_sec": age("speaker"),
+                    "enabled": speaker_enabled},
+        "inspect": {"text": snap["inspect_status"], "age_sec": age("inspect")},
+        "safety": {"text": snap["safety_status"], "age_sec": age("safety"),
+                   "blocked": fresh("safety")
+                              and snap["safety_status"].startswith("blocked")},
         "camera_age_sec": age("frame"),
     }
 
 
-def fetch_photos(limit=24):
-    """저장된 증거 사진 목록(최신순). DB 에 기록된 것 위주로 보여준다."""
+def fetch_photos(node=None, limit=24):
+    """저장된 증거 사진 목록(최신순).
+
+    node 를 주면 그 노드가 남긴 것만 준다 — 작업금지구역(restricted_node)과
+    안전모(helmet_node) 사진을 화면에서 다른 영역에 나눠 보여주기 위함이다.
+    """
     db_path = event_log.DEFAULT_DB
     rows = []
     if os.path.exists(db_path):
         con = sqlite3.connect(db_path, timeout=3.0)
         try:
             con.row_factory = sqlite3.Row
-            rows = [dict(r) for r in con.execute(
-                "SELECT ts, node, detail, person_count, image FROM events "
-                "WHERE image IS NOT NULL ORDER BY ts_epoch DESC LIMIT ?", (limit,)
-            ).fetchall()]
+            sql = ("SELECT ts, node, detail, person_count, image FROM events "
+                   "WHERE image IS NOT NULL")
+            args = []
+            if node:
+                sql += " AND node = ?"
+                args.append(node)
+            sql += " ORDER BY ts_epoch DESC LIMIT ?"
+            args.append(limit)
+            rows = [dict(r) for r in con.execute(sql, args).fetchall()]
         except sqlite3.Error:
             rows = []
         finally:
@@ -200,6 +310,27 @@ def fetch_photos(limit=24):
         if os.path.exists(os.path.join(event_log.SHOT_DIR, r["image"])):
             out.append(r)
     return out
+
+
+def fetch_inspections(limit=30):
+    """소화기 점검 기록(최신순)."""
+    db_path = event_log.DEFAULT_DB
+    if not os.path.exists(db_path):
+        return []
+    con = sqlite3.connect(db_path, timeout=3.0)
+    try:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT ts, name, qr_id, verdict, detail, mfg_date, expiry_date, "
+            "manager, days_left, image FROM inspections "
+            "ORDER BY ts_epoch DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    except sqlite3.Error:
+        # inspections 표가 아직 없는 옛 DB 일 수 있다 — 빈 목록으로 넘긴다.
+        return []
+    finally:
+        con.close()
 
 
 def fetch_events(limit=30):
@@ -237,6 +368,12 @@ PAGE_TMPL = """<!doctype html>
            display: flex; align-items: center; justify-content: space-between; }
   header h1 { margin: 0; font-size: 17px; letter-spacing: -0.2px; }
   header .clock { font-variant-numeric: tabular-nums; opacity: 0.75; font-size: 14px; }
+  .hdrright { display: flex; align-items: center; gap: 10px; }
+  .bigbtn { padding: 9px 16px; border: none; border-radius: 8px; cursor: pointer;
+            font-size: 14px; font-weight: 700; }
+  .bigbtn.go { background: #1a7f37; color: #fff; }
+  .bigbtn.stop { background: #4a5157; color: #fff; }
+  .bigbtn:active { transform: translateY(1px); }
 
   /* ---------- 경고 구역: 화면 맨 위에서 한눈에 보이게 ---------- */
   #alertzone { display: grid; gap: 10px; padding: 12px 16px 0;
@@ -291,8 +428,8 @@ PAGE_TMPL = """<!doctype html>
   .note { font-size: 11px; color: #8b949e; text-align: center; margin-top: 8px; }
 
   /* ---------- 증거 사진 ---------- */
-  #photos { display: grid; gap: 10px;
-            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+  .gallery { display: grid; gap: 10px;
+             grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
   .shot { border: 1px solid #e2e6ea; border-radius: 8px; overflow: hidden; background: #fafbfc; }
   .shot img { width: 100%; display: block; cursor: pointer; }
   .shot .cap { font-size: 11px; padding: 6px 7px; color: #57606a; }
@@ -312,7 +449,11 @@ PAGE_TMPL = """<!doctype html>
 <body>
 <header>
   <h1>순찰 로봇 관제</h1>
-  <div class="clock" id="clock">--:--:--</div>
+  <div class="hdrright">
+    <button id="startall" class="bigbtn go">▶ 전체 시동</button>
+    <button id="stopall" class="bigbtn stop">■ 전체 정지</button>
+    <div class="clock" id="clock">--:--:--</div>
+  </div>
 </header>
 
 <!-- 경고 구역 — 화재/침입/안전모를 눈으로 바로 확인 -->
@@ -327,7 +468,11 @@ PAGE_TMPL = """<!doctype html>
   </div>
   <div class="alert ok" id="a-helmet">
     <div class="icon">⛑️</div>
-    <div class="body"><div class="title">안전모</div><div class="sub">확인 중...</div></div>
+    <div class="body"><div class="title">안전모 (전면)</div><div class="sub">확인 중...</div></div>
+  </div>
+  <div class="alert ok" id="a-helmet-rear">
+    <div class="icon">🔄</div>
+    <div class="body"><div class="title">안전모 (후면)</div><div class="sub">확인 중...</div></div>
   </div>
 </div>
 
@@ -339,13 +484,38 @@ PAGE_TMPL = """<!doctype html>
   </div>
 
   <div class="card">
-    <h2>작업금지구역 모드</h2>
+    <h2>작업금지구역 감시</h2>
     <div class="moderow">
       <button class="modebtn" data-mode="auto" id="m-auto">자동 (시간표)</button>
       <button class="modebtn" data-mode="on" id="m-on">강제 감시</button>
       <button class="modebtn" data-mode="off" id="m-off">감시 해제</button>
     </div>
     <div class="modehint" id="modehint">불러오는 중...</div>
+
+    <hr style="border:none;border-top:1px solid #eee;margin:14px 0">
+    <h2>화재 감지 (24시간)</h2>
+    <div class="moderow">
+      <button class="modebtn" data-en="fire" data-on="1" id="fe-on">감지 켜기</button>
+      <button class="modebtn" data-en="fire" data-on="0" id="fe-off">감지 끄기</button>
+    </div>
+    <div class="modehint" id="firehint">불러오는 중...</div>
+
+    <hr style="border:none;border-top:1px solid #eee;margin:14px 0">
+    <h2>안전모 감지</h2>
+    <div class="moderow">
+      <button class="modebtn" data-en="helmet" data-on="1" id="he-on">감지 켜기</button>
+      <button class="modebtn" data-en="helmet" data-on="0" id="he-off">감지 끄기</button>
+    </div>
+    <div class="modehint" id="helmethint">불러오는 중...</div>
+
+    <hr style="border:none;border-top:1px solid #eee;margin:14px 0">
+    <h2>스피커 (음성 안내)</h2>
+    <div class="moderow">
+      <button class="modebtn" data-en="speaker" data-on="1" id="se-on">소리 켜기</button>
+      <button class="modebtn" data-en="speaker" data-on="0" id="se-off">음소거</button>
+    </div>
+    <div class="modehint" id="speakerhint">불러오는 중...</div>
+
     <hr style="border:none;border-top:1px solid #eee;margin:14px 0">
     <h2>화재 시연 (수동)</h2>
     <div class="moderow">
@@ -362,17 +532,43 @@ PAGE_TMPL = """<!doctype html>
       <button id="ks">▼</button><button id="kr">▶</button>
     </div>
     <button id="stopbtn">정지 (Space)</button>
+    <div class="modehint" id="safetyhint" style="margin-top:10px"></div>
     <div class="note">키를 떼거나 0.4초간 신호가 없으면 자동 정지합니다</div>
   </div>
 
   <div class="card">
     <h2>소화기 점검</h2>
     <div class="modehint" id="extstatus">불러오는 중...</div>
+    <div class="modehint" id="inspstatus" style="margin-top:8px"></div>
+    <div class="moderow" style="margin-top:10px">
+      <button class="modebtn" id="insp-now">지금 점검</button>
+    </div>
+    <div class="note">QR 이 없어도 대장 첫 소화기로 압력계를 판정합니다</div>
   </div>
 
   <div class="card wide">
-    <h2>증거 사진 (침입 감지 시 자동 촬영)</h2>
-    <div id="photos"><div class="modehint">불러오는 중...</div></div>
+    <h2>🚷 작업금지구역 침입 — 증거 사진</h2>
+    <div class="gallery" id="photos-intrusion"><div class="modehint">불러오는 중...</div></div>
+  </div>
+
+  <div class="card wide">
+    <h2>⛑️ 안전모 미착용 — 증거 사진</h2>
+    <div class="gallery" id="photos-helmet"><div class="modehint">불러오는 중...</div></div>
+  </div>
+
+  <div class="card wide">
+    <h2>🔄 안전모 미착용 (후면 CSI) — 증거 사진</h2>
+    <div class="gallery" id="photos-helmet-rear"><div class="modehint">불러오는 중...</div></div>
+  </div>
+
+  <div class="card wide">
+    <h2>🧯 소화기 점검 기록</h2>
+    <table>
+      <thead><tr><th>점검시각</th><th>소화기</th><th>QR</th><th>압력계</th>
+                 <th>제조년월</th><th>교체년월</th><th>남은일수</th>
+                 <th>책임자</th><th>사진</th></tr></thead>
+      <tbody id="inspbody"><tr><td colspan="9">불러오는 중...</td></tr></tbody>
+    </table>
   </div>
 
   <div class="card wide">
@@ -417,11 +613,19 @@ function refreshStatus() {
           iv.alert ? '작업금지구역 인원 감지!' : '작업금지구역 — 이상 없음',
           sub);
 
-    // 안전모
+    // 안전모 (전면 웹캠)
     paint(document.getElementById('a-helmet'),
           d.helmet.alert ? 'warn' : 'ok',
-          d.helmet.alert ? '안전모 미착용 감지!' : '안전모 — 이상 없음',
+          d.helmet.alert ? '안전모 미착용 감지! (전면)' : '안전모 전면 — 이상 없음',
           d.helmet.text);
+
+    // 안전모 (후면 CSI) — 로봇이 지나간 뒤 벗는 경우를 잡는다
+    const hr = d.helmet_rear || {alert: false, text: '', age_sec: -1};
+    paint(document.getElementById('a-helmet-rear'),
+          hr.alert ? 'warn' : 'ok',
+          hr.alert ? '안전모 미착용 감지! (후면)'
+                   : (hr.age_sec < 0 ? '안전모 후면 — 노드 미실행' : '안전모 후면 — 이상 없음'),
+          hr.text || 'CSI 카메라 필요');
 
     // 모드 버튼 활성 표시
     document.querySelectorAll('.modebtn[data-mode]').forEach(b => {
@@ -434,7 +638,43 @@ function refreshStatus() {
       '현재: <span class="badge ' + (iv.watching ? 'on' : 'off') + '">' +
       (iv.watching ? '감시 중' : '감시 안 함') + '</span>';
 
+    // 감지 켜짐/꺼짐 표시 + 버튼 활성
+    function enHint(en, name) {
+      if (en === null || en === undefined)
+        return name + ' 노드가 실행되지 않았습니다';
+      return '현재: <span class="badge ' + (en ? 'on' : 'off') + '">' +
+             (en ? '감지 켜짐' : '감지 꺼짐') + '</span>';
+    }
+    document.getElementById('firehint').innerHTML = enHint(d.fire.enabled, '화재 감지');
+    document.getElementById('helmethint').innerHTML = enHint(d.helmet.enabled, '안전모 감지');
+    document.getElementById('speakerhint').innerHTML =
+      (d.speaker.enabled === null || d.speaker.enabled === undefined)
+        ? '스피커 노드가 실행되지 않았습니다'
+        : ('현재: <span class="badge ' + (d.speaker.enabled ? 'on' : 'off') + '">' +
+           (d.speaker.enabled ? '소리 켜짐' : '음소거') + '</span>');
+    const enMap = {fire: d.fire.enabled, helmet: d.helmet.enabled,
+                   speaker: d.speaker.enabled};
+    document.querySelectorAll('.modebtn[data-en]').forEach(b => {
+      const en = enMap[b.dataset.en];
+      const wantOn = b.dataset.on === '1';
+      b.classList.toggle('active', en !== null && en !== undefined && en === wantOn);
+    });
+
+    // 라이다 충돌 방지 표시 — 막혔으면 눈에 띄게
+    const sh = document.getElementById('safetyhint');
+    if (!d.safety || d.safety.age_sec < 0) {
+      sh.innerHTML = '<span class="badge off">라이다 안전기능 대기</span>';
+    } else if (d.safety.blocked) {
+      sh.innerHTML = '<span class="badge on">⛔ 안전 정지 — 장애물 ' +
+                     d.safety.text.replace('blocked ', '') +
+                     '</span><br><small>회전은 가능합니다</small>';
+    } else {
+      sh.innerHTML = '<span class="badge off">✓ 진행 방향 안전</span>';
+    }
+
     document.getElementById('extstatus').textContent = d.extinguisher.text;
+    document.getElementById('inspstatus').textContent =
+      (d.inspect && d.inspect.age_sec >= 0) ? d.inspect.text : '점검 노드 미실행';
     document.getElementById('camnote').textContent =
       d.camera_age_sec >= 0 ? ('영상 ' + d.camera_age_sec.toFixed(1) + '초 전') : '영상 없음';
   }).catch(() => {});
@@ -444,18 +684,56 @@ function refreshCam() {
   document.getElementById('camimg').src = '/snapshot.jpg?t=' + Date.now();
 }
 
-function refreshPhotos() {
-  fetch('/api/photos').then(r => r.json()).then(rows => {
-    const box = document.getElementById('photos');
+function refreshGallery(kind, elId, emptyMsg) {
+  fetch('/api/photos?kind=' + kind).then(r => r.json()).then(rows => {
+    const box = document.getElementById(elId);
     if (!rows.length) {
-      box.innerHTML = '<div class="modehint">아직 저장된 사진이 없습니다</div>';
+      box.innerHTML = '<div class="modehint">' + emptyMsg + '</div>';
       return;
     }
-    box.innerHTML = rows.map(r =>
-      '<div class="shot"><img src="/photo/' + encodeURIComponent(r.image) +
-      '" onclick="showPhoto(this.src)">' +
-      '<div class="cap">' + r.ts + '<br>' + (r.person_count ?? '?') + '명</div></div>'
-    ).join('');
+    box.innerHTML = rows.map(r => {
+      const who = (r.person_count !== null && r.person_count !== undefined)
+                  ? (r.person_count + '명') : '';
+      return '<div class="shot"><img src="/photo/' + encodeURIComponent(r.image) +
+             '" onclick="showPhoto(this.src)">' +
+             '<div class="cap">' + r.ts + (who ? '<br>' + who : '') + '</div></div>';
+    }).join('');
+  }).catch(() => {});
+}
+
+function refreshPhotos() {
+  refreshGallery('intrusion', 'photos-intrusion', '아직 침입 감지 사진이 없습니다');
+  refreshGallery('helmet', 'photos-helmet', '아직 안전모 미착용 사진이 없습니다');
+  refreshGallery('helmet_rear', 'photos-helmet-rear',
+                 '아직 후면 안전모 미착용 사진이 없습니다');
+}
+
+function refreshInspections() {
+  fetch('/api/inspections').then(r => r.json()).then(rows => {
+    const body = document.getElementById('inspbody');
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="9">아직 점검 기록이 없습니다</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(r => {
+      const bad = r.verdict !== '정상';
+      const vcell = '<td style="font-weight:700;color:' +
+                    (bad ? '#d1242f' : '#1a7f37') + '">' + r.verdict + '</td>';
+      let dcell = '';
+      if (r.days_left !== null && r.days_left !== undefined) {
+        const soon = r.days_left < 30;
+        dcell = '<td style="color:' + (soon ? '#d1242f' : '#57606a') + '">D' +
+                (r.days_left >= 0 ? '+' : '') + r.days_left + '</td>';
+      } else { dcell = '<td></td>'; }
+      const thumb = r.image
+        ? '<td class="thumb"><img src="/photo/' + encodeURIComponent(r.image) +
+          '" onclick="showPhoto(this.src)"></td>'
+        : '<td></td>';
+      return '<tr><td>' + r.ts + '</td><td>' + (r.name || '') + '</td><td>' +
+             (r.qr_id || '-') + '</td>' + vcell +
+             '<td>' + (r.mfg_date || '-') + '</td><td>' + (r.expiry_date || '-') +
+             '</td>' + dcell + '<td>' + (r.manager || '-') + '</td>' + thumb + '</tr>';
+    }).join('');
   }).catch(() => {});
 }
 
@@ -489,10 +767,41 @@ function post(url, payload) {
   return fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
                      body: JSON.stringify(payload)}).catch(() => {});
 }
-document.querySelectorAll('.modebtn[data-mode]').forEach(b => {
+
+// 버튼을 누르면 노드가 상태를 낼 때까지 잠깐 걸린다(2초 주기). 그 사이 화면이
+// 그대로면 "안 눌렸나" 싶으므로, 누른 버튼을 바로 강조하고 몇 번 더 빨리 새로고침한다.
+function markPressed(btn, group) {
+  if (group) group.forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+function pollFast() {
+  [200, 600, 1200, 2200].forEach(ms => setTimeout(refreshStatus, ms));
+}
+const modeBtns = [...document.querySelectorAll('.modebtn[data-mode]')];
+modeBtns.forEach(b => {
   b.addEventListener('click', () => {
-    post('/api/mode', {mode: b.dataset.mode}).then(() => setTimeout(refreshStatus, 300));
+    markPressed(b, modeBtns);
+    post('/api/mode', {mode: b.dataset.mode}).then(pollFast);
   });
+});
+document.querySelectorAll('.modebtn[data-en]').forEach(b => {
+  b.addEventListener('click', () => {
+    // 같은 기능(fire/helmet/speaker)의 켜기·끄기 버튼끼리만 강조를 옮긴다
+    const group = [...document.querySelectorAll(
+      '.modebtn[data-en="' + b.dataset.en + '"]')];
+    markPressed(b, group);
+    post('/api/enable', {what: b.dataset.en, on: b.dataset.on === '1'}).then(pollFast);
+  });
+});
+document.getElementById('insp-now').addEventListener('click', () => {
+  post('/api/inspect_now', {}).then(pollFast);
+});
+document.getElementById('startall').addEventListener('click', () => {
+  post('/api/start_all', {on: true}).then(pollFast);
+});
+document.getElementById('stopall').addEventListener('click', () => {
+  if (!confirm('모든 감지를 정지합니다. 계속하시겠습니까?')) return;
+  post('/api/start_all', {on: false}).then(pollFast);
 });
 document.getElementById('f-on').addEventListener('click', () => {
   post('/api/fire_test', {on: true}).then(() => setTimeout(refreshStatus, 300));
@@ -525,8 +834,12 @@ function stopMove() {
 
 // 표준 ROS 관례(+x = 전진). Nav2 자율주행에서 실측 검증된 방향과 같다.
 const KEYMAP = {
-  'ArrowUp': [0.10, 0, 'kf'], 'w': [0.10, 0, 'kf'], 'W': [0.10, 0, 'kf'],
-  'ArrowDown': [-0.10, 0, 'ks'], 's': [-0.10, 0, 'ks'], 'S': [-0.10, 0, 'ks'],
+  // ⚠️ 이 로봇은 +x 명령이 물리적으로는 후진이다(2026-09-04 실측, 이전에도 같은
+  // 결론이었다). odom 자체는 일관적이라 Nav2 자율주행엔 영향이 없고, 사람이 보는
+  // 버튼 이름표만 실제 방향에 맞춘 것이다.
+  // 방향이 또 반대로 느껴지면 여기 부호만 뒤집으면 된다(아래 mousedown 4줄도 함께).
+  'ArrowUp': [-0.10, 0, 'kf'], 'w': [-0.10, 0, 'kf'], 'W': [-0.10, 0, 'kf'],
+  'ArrowDown': [0.10, 0, 'ks'], 's': [0.10, 0, 'ks'], 'S': [0.10, 0, 'ks'],
   'ArrowLeft': [0, 0.6, 'kl'], 'a': [0, 0.6, 'kl'], 'A': [0, 0.6, 'kl'],
   'ArrowRight': [0, -0.6, 'kr'], 'd': [0, -0.6, 'kr'], 'D': [0, -0.6, 'kr'],
 };
@@ -549,8 +862,8 @@ document.addEventListener('keyup', e => {
 });
 window.addEventListener('blur', stopMove);
 
-document.getElementById('kf').addEventListener('mousedown', () => startMove(0.10, 0, 'kf'));
-document.getElementById('ks').addEventListener('mousedown', () => startMove(-0.10, 0, 'ks'));
+document.getElementById('kf').addEventListener('mousedown', () => startMove(-0.10, 0, 'kf'));
+document.getElementById('ks').addEventListener('mousedown', () => startMove(0.10, 0, 'ks'));
 document.getElementById('kl').addEventListener('mousedown', () => startMove(0, 0.6, 'kl'));
 document.getElementById('kr').addEventListener('mousedown', () => startMove(0, -0.6, 'kr'));
 document.querySelectorAll('.keys button').forEach(b => {
@@ -564,7 +877,8 @@ setInterval(refreshCam, 1000);
 setInterval(refreshStatus, 1500);
 setInterval(refreshPhotos, 8000);
 setInterval(refreshEvents, 5000);
-refreshCam(); refreshStatus(); refreshPhotos(); refreshEvents();
+setInterval(refreshInspections, 6000);
+refreshCam(); refreshStatus(); refreshPhotos(); refreshEvents(); refreshInspections();
 </script>
 </body>
 </html>
@@ -591,8 +905,20 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/events"):
             body = json.dumps(fetch_events()).encode("utf-8")
             self._send(200, "application/json", body)
+        elif self.path.startswith("/api/inspections"):
+            body = json.dumps(fetch_inspections()).encode("utf-8")
+            self._send(200, "application/json", body)
         elif self.path.startswith("/api/photos"):
-            body = json.dumps(fetch_photos()).encode("utf-8")
+            # /api/photos?kind=intrusion|helmet (없으면 전체)
+            kind = ""
+            if "?" in self.path:
+                for part in self.path.split("?", 1)[1].split("&"):
+                    if part.startswith("kind="):
+                        kind = part[5:]
+            node = {"intrusion": "restricted_node",
+                    "helmet": "helmet_node",
+                    "helmet_rear": "helmet_node_rear"}.get(kind)
+            body = json.dumps(fetch_photos(node=node)).encode("utf-8")
             self._send(200, "application/json", body)
         elif self.path.startswith("/photo/"):
             self._send_photo(self.path[len("/photo/"):])
@@ -654,6 +980,35 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, "text/plain", b"bad request")
                 return
             _dashboard_node.send_fire_trigger(on)
+            self._send(200, "application/json", b'{"ok": true}')
+        elif self.path.startswith("/api/enable"):
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                data = json.loads(self.rfile.read(length) or b"{}")
+                what = str(data.get("what", "")).lower()
+                on = bool(data.get("on", False))
+            except (ValueError, json.JSONDecodeError):
+                self._send(400, "text/plain", b"bad request")
+                return
+            if what not in ("fire", "helmet", "speaker"):
+                self._send(400, "application/json",
+                          b'{"error": "what must be fire|helmet|speaker"}')
+                return
+            _dashboard_node.send_enable(what, on)
+            self._send(200, "application/json", b'{"ok": true}')
+        elif self.path.startswith("/api/inspect_now"):
+            self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0)
+            _dashboard_node.send_inspect_now()
+            self._send(200, "application/json", b'{"ok": true}')
+        elif self.path.startswith("/api/start_all"):
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                data = json.loads(self.rfile.read(length) or b"{}")
+                on = bool(data.get("on", True))
+            except (ValueError, json.JSONDecodeError):
+                self._send(400, "text/plain", b"bad request")
+                return
+            _dashboard_node.send_start_all(on)
             self._send(200, "application/json", b'{"ok": true}')
         else:
             self._send(404, "text/plain", b"not found")

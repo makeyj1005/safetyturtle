@@ -29,7 +29,7 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 SOUND_DIR = os.path.join(os.path.expanduser("~"), "vibe", "ex1", "sounds")
 
@@ -49,12 +49,24 @@ class SpeakerNode(Node):
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
         self.pub_status = self.create_publisher(String, "/speaker/status", qos)
         self.create_subscription(String, "/speaker/play", self.on_play, qos)
+        # 음소거 스위치 — 웹 대시보드의 "전체 시동/정지" 가 여기로 보낸다.
+        # 노드를 죽이지 않고 소리만 끄는 이유: 시연 준비 중이나 야간 점검 때
+        # 조용히 있어야 하는데, 노드를 내리면 기록·상태 표시까지 같이 끊긴다.
+        self.create_subscription(Bool, "/speaker/enable", self.on_enable, qos)
 
+        self.enabled = True
         self.proc = None
         self.get_logger().info(
             f"speaker_node 시작 — 장치={self.get_parameter('device').value}, "
             f"소리폴더={self.get_parameter('sound_dir').value}"
         )
+        # 대시보드가 "스피커가 살아있고 음소거가 아닌지" 알 수 있게 주기적으로 낸다.
+        self.create_timer(5.0, self.heartbeat)
+
+    def heartbeat(self):
+        if self.busy():
+            return          # 재생 중에는 on_play 가 이미 상태를 냈다
+        self.status(f"idle enabled={'yes' if self.enabled else 'no'}")
 
     def resolve(self, name):
         """논리 이름이면 sounds/<이름>.mp3 로, 경로면 그대로 쓴다."""
@@ -69,7 +81,21 @@ class SpeakerNode(Node):
     def busy(self):
         return self.proc is not None and self.proc.poll() is None
 
+    def on_enable(self, msg: Bool):
+        want = bool(msg.data)
+        if want == self.enabled:
+            return
+        self.enabled = want
+        self.get_logger().warn(f"스피커 {'켜짐' if want else '음소거'}")
+        if not want and self.busy():
+            self.proc.terminate()        # 재생 중이면 즉시 끊는다
+        self.status(f"enabled={'yes' if want else 'no'}")
+
     def on_play(self, msg: String):
+        if not self.enabled:
+            self.get_logger().info("음소거 상태라 재생하지 않는다",
+                                  throttle_duration_sec=30.0)
+            return
         path = self.resolve(msg.data)
         if path is None:
             return

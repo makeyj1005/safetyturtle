@@ -75,6 +75,7 @@ from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import Bool, String
 from turtlebot3_msgs.srv import Sound
 
+from patrol_core import event_log      # 위반 기록·증거사진 (restricted_node 와 같은 DB)
 from patrol_core import shot_grab      # ssh 옵션·헬퍼를 그대로 쓴다(ControlMaster 재사용)
 
 EX1 = os.path.join(os.path.expanduser("~"), "vibe", "ex1")
@@ -251,7 +252,12 @@ class HelmetNode(Node):
         # 반면 **정지 상태에서 미착용이라고 판정한 것은 오탐이 0** 이었다(18장 전부).
         # 그래서 세운 뒤 judge_sec 동안 모아, 미착용이 judge_bad_min 장 이상이면
         # 미착용으로 확정한다. 한 장도 없으면 착용으로 보고 출발한다.
-        self.declare_parameter("judge_sec", 5.0)
+        # [2026-09-04 단축: 5.0 -> 2.0] 실사용에서 "판단이 한참 걸린다"는 피드백.
+        # 3fps × 5초 = 15장이 통계 근거였는데, 웹캠을 8fps 로 올리면 2초에 16장이라
+        # **표본 수는 그대로 유지하면서 대기 시간만 2.5배 줄어든다**.
+        # ⚠️ fps 를 다시 3 으로 내릴 때는 이 값도 5.0 으로 돌려야 근거가 유지된다
+        #    (start_all.sh 의 WEBCAM_FPS 와 짝으로 보라).
+        self.declare_parameter("judge_sec", 2.0)
         # 미착용 확정 조건: 미착용이 **사람이 보인 프레임의 judge_bad_ratio 이상**이고
         # judge_bad_min 장 이상일 때. 개수만 보면 안 된다 — 2026-08-03 실주행에서
         # 안전모를 쓰고 있었는데 14장 중 4장이 미착용으로 나와(머리가 화면에서 잘리거나
@@ -306,6 +312,24 @@ class HelmetNode(Node):
         # 음성 안내 — 로봇 speaker_node 에 /speaker/play 로 이름만 보낸다(fire_node 와 동일).
         self.declare_parameter("voice_enabled", True)
         self.declare_parameter("voice_sound", "helmet_bad")
+
+        # --- 앞/뒤 카메라로 두 대를 띄울 때 구분하는 값 (2026-09-04 추가) ---
+        # [왜 필요한가] 앞에서만 안전모를 쓰고 로봇이 지나가면 벗는 경우를 잡으려고
+        # CSI(후면) 카메라로 같은 노드를 하나 더 띄운다. 그런데 절대 규칙 7 —
+        # "같은 노드가 둘이면 서로 목표를 뺏고 기록을 겹쳐 쓴다" — 을 피해야 하므로
+        # 상태 토픽·사진 접두어·DB 이름·CSV 폴더를 인스턴스마다 다르게 준다.
+        # 노드 이름도 함께 바꿔야 한다: -r __node:=helmet_node_rear
+        self.declare_parameter("status_topic", "/helmet/status")
+        self.declare_parameter("evidence_prefix", "helmet")
+        self.declare_parameter("db_node_name", "helmet_node")
+
+        # 미착용 확정 시 증거사진을 logs/shots_web/ 에 저장하고 events.sqlite 에 기록한다
+        # (2026-09-03 추가 — 작업금지구역 사진과 같은 방식이되 파일 접두어로 구분한다).
+        self.declare_parameter("save_evidence", True)
+        # 미착용이 계속되면 판단 창(judge_sec)마다 결론이 나므로, 그때마다 사진을
+        # 남기면 같은 사람으로 수십 장이 쌓인다. 이 간격(초) 안에는 한 장만 남긴다.
+        self.declare_parameter("evidence_interval_sec", 30.0)
+        self.declare_parameter("db_path", event_log.DEFAULT_DB)
 
         # --- 화면 보기 (현장 시험용) ---
         # 창을 띄워 카메라 영상과 판정을 그대로 보여준다. 순찰·Nav2 없이 그 자리에서
@@ -386,7 +410,8 @@ class HelmetNode(Node):
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
         self.pub_hold = self.create_publisher(Bool, "/patrol/hold", qos)
         self.pub_speaker = self.create_publisher(String, "/speaker/play", qos)
-        self.pub_status = self.create_publisher(String, "/helmet/status", qos)
+        self.pub_status = self.create_publisher(
+            String, str(self.get_parameter("status_topic").value), qos)
         self.pub_cam = self.create_publisher(Bool, "/webcam/enable", qos)
         # 영상을 받고 있는지 알린다. patrol_node 가 시작지점에서 이걸 기다린다 —
         # 무선 디스커버리가 16~40초 걸려서, 이 신호 없이는 첫 바퀴를 눈 감고 돈다.
@@ -397,6 +422,7 @@ class HelmetNode(Node):
             self.on_frame, qos_profile_sensor_data,
         )
         self.create_subscription(Bool, "/inspect/start", self.on_inspect_start, qos)
+        self.create_subscription(Bool, "/helmet/enable", self.on_enable, qos)
         self.create_subscription(String, "/inspect/status", self.on_inspect_status, qos)
         self.cli_sound = self.create_client(Sound, "/sound")
 
@@ -410,6 +436,19 @@ class HelmetNode(Node):
         self.n_held = 0              # 이번 보고 구간에서 판정보류한 프레임 수
         self.frame_faces = []       # 이번 프레임에서 찾은 얼굴들
         self.active = True          # 탐지 중인가 (점검 중이면 False)
+        # 웹에서 끄고 켤 수 있는 스위치(/helmet/enable). active 와 따로 두는 이유:
+        # active 는 소화기 점검이 카메라를 가져갈 때 자동으로 내려가는 것이고,
+        # 이쪽은 사람이 의도적으로 끈 것이다 — 둘을 섞으면 점검이 끝날 때
+        # 사람이 꺼둔 감시가 멋대로 다시 켜진다.
+        self.enabled = True
+        # 증거사진용 — **미착용으로 보인 순간**의 프레임을 따로 들고 있는다.
+        # [왜 최신 프레임을 쓰면 안 되는가 — 2026-09-03 실측]
+        # 미착용 확정은 판단 창(judge_sec=5초)이 끝날 때 나온다. 그때의 최신 프레임을
+        # 쓰면 사람이 이미 지나가 버려서 "빈 배경"이 증거로 남았다. 그래서 창이 도는
+        # 동안 미착용이 보이는 프레임을 잡아 두고, 확정 시 그걸 저장한다.
+        self.evidence_frame = None
+        self.evidence_worst = None
+        self.last_evidence_at = 0.0
         self.holding = False        # 지금 세워 둔 상태인가
         self.bad_streak = 0
         self.good_streak = 0
@@ -434,8 +473,11 @@ class HelmetNode(Node):
         stamp = time.strftime("%m%d_%H%M%S")
         log_dir = str(self.get_parameter("log_dir").value)
         os.makedirs(log_dir, exist_ok=True)
-        self.shot_dir = os.path.join(log_dir, f"helmet_{stamp}")
-        self.csv_path = os.path.join(log_dir, f"helmet_{stamp}.csv")
+        # 앞/뒤 두 대를 띄울 때 CSV·사진 폴더가 겹치지 않게 접두어를 쓴다
+        # (절대 규칙 7 — 같은 노드 둘이 기록을 겹쳐 쓰면 회차가 통째로 날아간다).
+        tag = str(self.get_parameter("evidence_prefix").value)
+        self.shot_dir = os.path.join(log_dir, f"{tag}_{stamp}")
+        self.csv_path = os.path.join(log_dir, f"{tag}_{stamp}.csv")
         self.csv_started = False
 
         if str(self.get_parameter("method").value) == "hair":
@@ -457,7 +499,9 @@ class HelmetNode(Node):
 
         self.create_timer(float(self.get_parameter("enable_period_sec").value),
                           self.push_camera_state)
-        self.create_timer(10.0, self.report)
+        self.create_timer(10.0, self.report)         # 콘솔 요약
+        # 대시보드용 상태는 따로 빠르게 낸다(웹 버튼 반응이 느려 보이지 않게).
+        self.create_timer(2.0, self.status_tick)
         self.push_camera_state()
         # 로봇 웹캠 노드를 띄운다. ssh 왕복이 있어 생성자에서 몇 초 걸린다.
         self.start_remote_camera()
@@ -689,6 +733,20 @@ class HelmetNode(Node):
         return out, (f"일반값 {list(self.get_parameter('helmet_colors').value)} "
                      "— tools/helmet_calib.py 로 실제 안전모를 찍어 등록하면 더 정확하다")
 
+    # ---------------- 웹에서 켜고 끄기 ----------------
+    def on_enable(self, msg: Bool):
+        """웹 대시보드가 안전모 감시를 켜고 끈다(/helmet/enable)."""
+        want = bool(msg.data)
+        if want == self.enabled:
+            return
+        self.enabled = want
+        self.get_logger().warn(f"안전모 감시 {'켜짐' if want else '꺼짐'} (웹 요청)")
+        if not want:
+            # 끌 때는 세워둔 것도 반드시 푼다 — 안 풀면 순찰이 영원히 멈춘 채 남는다.
+            self.release_hold("감시 꺼짐")
+        # 바뀐 상태를 즉시 낸다(report() 는 10초 주기라 웹 반응이 느려 보인다).
+        self.status(f"idle enabled={'yes' if want else 'no'}")
+
     # ---------------- 점검과의 상호배제 ----------------
     def on_inspect_start(self, msg: Bool):
         if not bool(msg.data) or not bool(self.get_parameter("yield_to_inspect").value):
@@ -742,7 +800,7 @@ class HelmetNode(Node):
         return max(int(self.get_parameter(key).value), 1)
 
     def on_frame(self, msg: CompressedImage):
-        if not self.active:
+        if not self.active or not self.enabled:
             return
         # 부하 조절: N 프레임마다 한 번만 판정한다. 디코딩 전에 걸러야 의미가 있다.
         self.n_recv += 1
@@ -822,6 +880,11 @@ class HelmetNode(Node):
         else:
             bad = (worst is not None
                    and worst[1] < float(self.get_parameter("helmet_ratio").value))
+        # 미착용으로 보이는 프레임을 증거 후보로 잡아 둔다(확정은 5초 뒤에 나므로
+        # 그때의 최신 프레임을 쓰면 사람이 이미 사라져 있다 — 위 주석 참고).
+        if bad and worst is not None:
+            self.evidence_frame = frame.copy()
+            self.evidence_worst = worst
         self.update_streak(bad, frame, worst, len(persons))
 
     def find_persons(self, frame):
@@ -1124,6 +1187,7 @@ class HelmetNode(Node):
                 "❗ 안전모 미착용 — 정지 유지" if self.quiet() else
                 f"판단 결과: **안전모 미착용** ({tally}, 기준 {need}장) — 계속 정지한다")
             self.status(f"미착용 확정 ({tally})")
+            self.save_evidence(tally)
             self.alarm()
             # 안전모를 쓰거나 비킬 때까지 계속 본다.
             self.start_window(time.time())
@@ -1134,6 +1198,43 @@ class HelmetNode(Node):
         self.ok_cleared = True
         self.alarm(ok=True)         # 통과 신호(1번, 길게 한 번) — 미착용 소리와 구분된다
         self.release_hold(f"안전모 착용 판단 ({tally})")
+
+    def save_evidence(self, tally):
+        """미착용 확정 시 증거사진을 남기고 events.sqlite 에 기록한다.
+
+        작업금지구역(restricted_node)과 같은 폴더·같은 DB 를 쓰되 파일 접두어를
+        "helmet" 으로 둬서 대시보드가 두 영역을 나눠 보여줄 수 있게 한다.
+        """
+        if not bool(self.get_parameter("save_evidence").value):
+            return
+        now = time.time()
+        gap = float(self.get_parameter("evidence_interval_sec").value)
+        if now - self.last_evidence_at < gap:
+            return                  # 같은 사람으로 사진이 쌓이는 것을 막는다
+        self.last_evidence_at = now
+
+        image = None
+        if self.evidence_frame is not None:
+            shot = self.annotate(self.evidence_frame, self.evidence_worst, "미착용")
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
+            cv2.putText(shot, f"NO HELMET {stamp}", (10, shot.shape[0] - 12),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            image = event_log.save_shot(
+                shot, prefix=str(self.get_parameter("evidence_prefix").value))
+            if image is None:
+                self.get_logger().warn("증거사진 저장 실패", throttle_duration_sec=30.0)
+            # 다음 위반은 새 프레임으로 잡는다 — 안 지우면 옛 사진이 재사용된다.
+            self.evidence_frame = None
+            self.evidence_worst = None
+        else:
+            self.get_logger().warn("증거 프레임이 없다 — 사진 없이 기록만 남긴다",
+                                  throttle_duration_sec=30.0)
+
+        if not event_log.log_event(
+                str(self.get_parameter("db_node_name").value), "alert",
+                f"안전모 미착용 확정 ({tally})",
+                image=image, db_path=str(self.get_parameter("db_path").value)):
+            self.get_logger().warn("이벤트 기록 실패(sqlite)", throttle_duration_sec=30.0)
 
     def take_hold(self, worst, why=None, alarm=True):
         """세운다. why 가 없으면 미착용 확정으로 보고 부저를 울린다."""
@@ -1185,11 +1286,20 @@ class HelmetNode(Node):
         ok=True  (착용)   — sound_ok_value 를 sound_ok_repeat 번. 출발할 때 한 번만
                            울리므로 realert_sec 간격 제한을 받지 않는다.
         """
-        if not bool(self.get_parameter("sound").value):
-            return
         now = time.time()
         if not ok and now - self.last_alarm < float(
                 self.get_parameter("realert_sec").value):
+            return
+
+        # ⚠️ 음성은 부저(sound)와 독립이다 — 2026-09-03 실측 버그:
+        # 예전엔 맨 위에서 sound 파라미터를 검사하고 return 했는데, OpenCR 부저를
+        # 끄려고 sound:=false 로 띄우면 스피커 음성까지 같이 막혔다(아무 소리도 안 남).
+        # 음성은 voice_enabled 가, 부저는 sound 가 각각 담당한다.
+        if not ok:
+            self.last_alarm = now
+            self.speak()
+
+        if not bool(self.get_parameter("sound").value):
             return
         wait = float(self.get_parameter("sound_wait_sec").value)
         if not self.cli_sound.wait_for_service(timeout_sec=wait):
@@ -1203,10 +1313,8 @@ class HelmetNode(Node):
             value = int(self.get_parameter("sound_ok_value").value)
             reps = max(int(self.get_parameter("sound_ok_repeat").value), 1)
         else:
-            self.last_alarm = now
             value = int(self.get_parameter("sound_value").value)
             reps = max(int(self.get_parameter("sound_repeat").value), 1)
-            self.speak()
         if value <= 0:
             return
         gap = float(self.get_parameter("sound_gap_sec").value)
@@ -1320,9 +1428,15 @@ class HelmetNode(Node):
         m.data = text
         self.pub_status.publish(m)
 
+    def status_tick(self):
+        """대시보드용 상태 발행(2초 주기). 세워둔 상태(hold)면 그쪽 상태가 우선이라
+        건드리지 않는다 — 덮어쓰면 경고가 화면에서 깜빡인다."""
+        if not self.holding:
+            self.status(f"idle enabled={'yes' if self.enabled else 'no'}")
+
     def report(self):
         now = time.time()
-        if not self.active:
+        if not self.active or not self.enabled:
             return
         if self.last_frame_at is None:
             # 갓 띄운 뒤에는 아직 안 오는 게 정상이다(디스커버리 실측 42초).

@@ -24,12 +24,14 @@ cmd_vel_mux.py — 여러 주행 명령 중 하나를 골라 /cmd_vel 로 최종
   - 통과시키는 게 아니라 고정 주기로 발행한다. 입력이 끊기면 자동으로 0 이 나가야 하기 때문이다.
   - /mux/enable 로 False 를 받으면 무조건 0 을 발행한다 (소프트 비상정지)
 """
+import math
 import time
 
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, String
 
 # (토픽, 우선순위) — 숫자가 작을수록 우선.
@@ -53,9 +55,28 @@ class CmdVelMux(Node):
         self.declare_parameter("max_linear", 0.15)
         self.declare_parameter("max_angular", 1.2)
 
+        # --- 라이다 충돌 방지 (2026-09-04 추가) ---
+        # 진행 방향에 이 거리(m) 안쪽으로 뭔가 있으면 그 방향 직진을 막는다.
+        # 회전은 막지 않는다 — 막으면 벽에 붙었을 때 빠져나올 방법이 없어진다.
+        # 여기(mux)에 넣는 이유: /cmd_vel 을 내는 유일한 지점이라 웹 조작·Nav2·
+        # 정렬 회전까지 한 곳에서 전부 보호된다.
+        self.declare_parameter("safety_enabled", True)
+        self.declare_parameter("stop_distance", 0.25)
+        # 진행 방향 기준 좌우 이 각도(도)만큼을 "앞"으로 본다. 너무 넓게 잡으면
+        # 옆으로 지나가는 벽에도 걸려 못 움직인다.
+        self.declare_parameter("sector_deg", 50.0)
+        # [⚠️ 방향 매핑 — 2026-09-04 실측]
+        # 이 로봇은 +x 명령이 물리적으로 **차체 뒤쪽**으로 간다(대시보드가 ▲ 에
+        # -x 를 보내는 이유). 라이다 0° 는 차체 앞을 본다. 그래서
+        #   x < 0 (물리적 전진) -> 라이다 0°   구역을 본다
+        #   x > 0 (물리적 후진) -> 라이다 180° 구역을 본다
+        # 만약 실측에서 반대로 걸리면 이 값을 false 로 주면 매핑이 뒤집힌다.
+        self.declare_parameter("negative_x_is_chassis_front", True)
+
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
         self.pub = self.create_publisher(Twist, "/cmd_vel", qos)
         self.pub_active = self.create_publisher(String, "/mux/active", qos)
+        self.pub_safety = self.create_publisher(String, "/mux/safety", qos)
 
         self._last = {t: 0.0 for t, _ in SOURCES}
         self._msg = {t: Twist() for t, _ in SOURCES}
@@ -68,6 +89,13 @@ class CmdVelMux(Node):
                 Twist, topic, lambda m, t=topic: self.on_cmd(t, m), qos
             )
         self.create_subscription(Bool, "/mux/enable", self.on_enable, qos)
+        # 라이다는 센서 QoS(best_effort)로 온다 — RELIABLE 로 구독하면 안 받힌다.
+        self.create_subscription(LaserScan, "/scan", self.on_scan,
+                                 qos_profile_sensor_data)
+
+        self._scan = None
+        self._scan_at = 0.0
+        self._prev_block = None
 
         self.create_timer(1.0 / float(self.get_parameter("rate").value), self.tick)
 
@@ -78,6 +106,61 @@ class CmdVelMux(Node):
     def on_cmd(self, topic: str, msg: Twist):
         self._msg[topic] = msg
         self._last[topic] = time.monotonic()
+
+    def on_scan(self, msg: LaserScan):
+        self._scan = msg
+        self._scan_at = time.monotonic()
+
+    def sector_min(self, center_deg):
+        """center_deg 를 중심으로 sector_deg 범위 안의 최단 거리(m). 없으면 None.
+
+        라이다는 측정 못 한 방향에 0.0 이나 inf 를 넣는다 — 그걸 "가깝다"로
+        읽으면 아무것도 없는데 멈춘다. range_min 아래와 무한값은 버린다.
+        """
+        scan = self._scan
+        if scan is None or not scan.ranges:
+            return None
+        half = math.radians(float(self.get_parameter("sector_deg").value)) / 2.0
+        center = math.radians(center_deg)
+        best = None
+        for i, r in enumerate(scan.ranges):
+            if r is None or math.isinf(r) or math.isnan(r):
+                continue
+            if r < max(scan.range_min, 0.05) or r > scan.range_max:
+                continue
+            ang = scan.angle_min + i * scan.angle_increment
+            # 각도 차이를 -pi~pi 로 정규화해서 비교한다(0°/360° 경계 문제를 피한다)
+            d = math.atan2(math.sin(ang - center), math.cos(ang - center))
+            if abs(d) <= half and (best is None or r < best):
+                best = r
+        return best
+
+    def safety_block(self, linear_x):
+        """이 직진 명령을 막아야 하면 (True, 사유)를 준다."""
+        if not bool(self.get_parameter("safety_enabled").value):
+            return False, ""
+        if abs(linear_x) < 1e-3:
+            return False, ""          # 안 움직이는 명령은 막을 것도 없다
+
+        # 라이다가 끊겼으면 막지 않는다. 안전 기능이 센서 고장으로 로봇을
+        # 아예 못 움직이게 만들면, 사람이 손으로 빼내야 해서 오히려 위험하다.
+        # 대신 상태로 알린다.
+        if self._scan is None or (time.monotonic() - self._scan_at) > 1.5:
+            return False, "라이다 신호 없음(안전기능 비활성)"
+
+        neg_is_front = bool(self.get_parameter(
+            "negative_x_is_chassis_front").value)
+        going_chassis_front = (linear_x < 0) if neg_is_front else (linear_x > 0)
+        center = 0.0 if going_chassis_front else 180.0
+
+        dist = self.sector_min(center)
+        if dist is None:
+            return False, ""
+        stop = float(self.get_parameter("stop_distance").value)
+        if dist < stop:
+            where = "앞" if going_chassis_front else "뒤"
+            return True, f"{where} {dist:.2f}m (기준 {stop:.2f}m)"
+        return False, ""
 
     def on_enable(self, msg: Bool):
         self._enabled = bool(msg.data)
@@ -104,6 +187,22 @@ class CmdVelMux(Node):
         t.angular.x = 0.0
         t.angular.y = 0.0
         t.angular.z = max(-ma, min(out.angular.z, ma))
+
+        # 라이다 충돌 방지 — 직진만 막고 회전은 남긴다(벽에서 빠져나올 수 있어야 한다)
+        blocked, why = self.safety_block(t.linear.x)
+        if blocked:
+            t.linear.x = 0.0
+        if why != self._prev_block:
+            self._prev_block = why
+            if blocked:
+                self.get_logger().warn(f"안전 정지 — 장애물 {why} / 회전은 가능하다")
+            elif why:
+                self.get_logger().warn(why)
+        s = String()
+        s.data = (f"blocked {why}" if blocked
+                  else (why if why else "clear"))
+        self.pub_safety.publish(s)
+
         self.pub.publish(t)
 
         label = chosen if chosen else ("STOP (no input)" if self._enabled else "STOP (disabled)")

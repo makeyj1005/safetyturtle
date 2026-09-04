@@ -118,11 +118,15 @@ class FireNode(Node):
         self.cli_sound = self.create_client(Sound, "/sound")
         self.cli_pose = ActionClient(self, NavigateToPose, "navigate_to_pose")
 
+        # 웹에서 화재 감지를 켜고 끈다. 센서 오탐이 잦은 환경에서 잠깐 끄거나,
+        # 시연 준비 중에 조용히 있게 할 때 쓴다.
+        self.create_subscription(Bool, "/fire/enable", self.on_enable, qos)
         self.create_subscription(Bool, "/fire/trigger", self.on_trigger, qos)
         # 로봇 GPIO23 불꽃센서 실측값 — gpio_io_node.py 가 낸다. 수동 트리거와 같은
         # 콜백으로 합친다(둘 다 True 를 보내면 화재 대응 시작).
         self.create_subscription(Bool, "/flame/detected", self.on_trigger, qos)
 
+        self.enabled = True         # 웹에서 끄고 켤 수 있다(/fire/enable)
         self.active = False
         self.goal_handle = None
         self.alarm_timer = None
@@ -137,9 +141,32 @@ class FireNode(Node):
         self.get_logger().info(
             "fire_node 시작 — /flame/detected(GPIO 불꽃센서) 와 /fire/trigger(수동) 둘 다 듣는다"
         )
+        # 경보가 없을 때도 대시보드가 "감지가 켜져 있는지"를 알아야 하므로 주기적으로 낸다.
+        self.create_timer(2.0, self.heartbeat)  # 웹 반응이 느려 보이지 않게 2초
+
+    def heartbeat(self):
+        if self.active:
+            return          # 경보 중에는 start_fire/on_alarm_tick 이 이미 상태를 낸다
+        self.status(f"idle enabled={'yes' if self.enabled else 'no'}")
+
+    # ---------------- 켜고 끄기 ----------------
+    def on_enable(self, msg: Bool):
+        want = bool(msg.data)
+        if want == self.enabled:
+            return
+        self.enabled = want
+        self.get_logger().warn(f"화재 감지 {'켜짐' if want else '꺼짐'} (웹 요청)")
+        if not want:
+            # 끌 때는 진행 중인 경보를 강제로 끝낸다(최소 경보시간 무시) — 안 그러면
+            # 껐는데도 20초간 계속 울린다.
+            self.clear_fire(force=True)
+        # 바뀐 상태를 즉시 낸다(하트비트를 기다리면 웹 반응이 느려 보인다).
+        self.heartbeat()
 
     # ---------------- 트리거 ----------------
     def on_trigger(self, msg: Bool):
+        if not self.enabled:
+            return
         self.flame_now = bool(msg.data)
         if self.flame_now:
             self.start_fire()

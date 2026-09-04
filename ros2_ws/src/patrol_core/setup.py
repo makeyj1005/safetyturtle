@@ -31,6 +31,7 @@ setup(
             "fire_node = patrol_core.fire_node:main",
             "restricted_node = patrol_core.restricted_node:main",
             "extinguisher_expiry_node = patrol_core.extinguisher_expiry_node:main",
+            "extinguisher_inspect_node = patrol_core.extinguisher_inspect_node:main",
         ],
     },
 )
