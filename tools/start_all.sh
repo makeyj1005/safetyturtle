@@ -6,6 +6,9 @@
 #   ~/vibe/ex1/tools/start_all.sh --no-drive # 주행 조작 없이 (센서·감지만)
 #   ~/vibe/ex1/tools/start_all.sh --no-rear  # 후면 CSI 노드 없이
 #   ~/vibe/ex1/tools/start_all.sh --stop     # 전부 끄기
+#   ~/vibe/ex1/tools/start_all.sh --stop --keep-dash  # 대시보드만 남기고 끄기
+#                                            (웹페이지에서 재시작을 누를 때 쓴다 —
+#                                             보고 있는 페이지가 죽으면 진행을 못 본다)
 #
 # [왜 스크립트가 필요한가 — 2026-09-03]
 # 세션마다 명령 10개를 손으로 치고 있었다(bringup, gpio, speaker, lcd, webcam,
@@ -76,9 +79,20 @@ bad() { printf '  \033[31m✗\033[0m %s\n' "$*"; }
 
 # ---------------------------------------------------------------- 끄기
 if [ "${1:-}" = "--stop" ]; then
+    KEEP_DASH=0
+    for a in "$@"; do
+        [ "$a" = "--keep-dash" ] && KEEP_DASH=1
+    done
     say "노트북 컨테이너 정지"
     for c in "${CONTAINERS[@]}"; do
-        docker stop "$c" >/dev/null 2>&1 && ok "$c" || true
+        if [ "$KEEP_DASH" = "1" ] && [ "$c" = "dashboard" ]; then
+            echo "  - dashboard (남겨둔다 — 웹페이지가 살아있어야 진행이 보인다)"
+            continue
+        fi
+        # -t 3: 기본 10초씩 기다리면 컨테이너 7개에 70초가 걸린다. 이 노드들은
+        # 저장할 상태가 없어서 3초면 충분하다(웹에서 재시작을 누른 사람이
+        # 70초를 멍하니 보고 있으면 고장난 줄 안다).
+        docker stop -t 3 "$c" >/dev/null 2>&1 && ok "$c" || true
     done
     say "로봇 노드 정지"
     # pkill -f 금지 규칙(HANDOFF2 3.3)을 지키려고 [문]자 트릭을 쓴다 —
@@ -181,6 +195,11 @@ run_node() {   # run_node <컨테이너이름> <gpu|cpu> <ros2 명령...>
                  source /root/vibe/ex1/ros2_ws/install/setup.bash
                  $*" >/dev/null && ok "$name" || bad "$name 시작 실패"
 }
+
+# 웹페이지의 '전체 시동/정지' 버튼이 실제로 프로세스를 재시작하려면
+# 호스트에서 도는 감시 프로세스가 필요하다(컨테이너 안에는 docker 가 없다).
+say "웹 재시작 감시 프로세스"
+"$(dirname "$0")/supervisor.sh" --daemon
 
 say "노트북 노드"
 if [ "$WITH_DRIVE" = "1" ]; then

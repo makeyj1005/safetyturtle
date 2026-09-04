@@ -50,8 +50,10 @@ MAX_ANGULAR = 0.6
 # 여러 스레드(ROS 콜백, HTTP 핸들러)가 같이 건드리므로 락으로 보호한다.
 state_lock = threading.Lock()
 state = {
-    "frame": None,           # 최신 jpeg 바이트
+    "frame": None,           # 최신 jpeg 바이트 (전면 웹캠)
     "frame_at": 0.0,
+    "frame_rear": None,      # 최신 jpeg 바이트 (후면 CSI)
+    "frame_rear_at": 0.0,
     "restricted_status": "(아직 없음)",
     "restricted_at": 0.0,
     "fire_status": "(아직 없음)",
@@ -75,6 +77,42 @@ state = {
 # 하는 안전장치다(lcd_node 의 STALE_SEC 과 같은 이유).
 STALE_SEC = 15.0
 
+# 웹에서 누른 '전체 시동/정지'를 호스트의 supervisor.sh 에 전달하는 통로.
+# 대시보드는 컨테이너 안이라 docker·ssh 를 쓸 수 없다. 대신 공유 폴더에
+# 한 줄 써 두면 호스트에서 도는 감시 프로세스가 대신 실행해 준다.
+CTL_DIR = os.path.join(os.path.expanduser('~'), 'vibe', 'ex1', 'logs', 'control')
+CTL_REQUEST = os.path.join(CTL_DIR, 'request')
+CTL_STATUS = os.path.join(CTL_DIR, 'status')
+
+
+def ctl_write(action):
+    """재시작/정지 요청을 남긴다. 성공하면 (True, '')."""
+    try:
+        os.makedirs(CTL_DIR, exist_ok=True)
+        # 임시 파일에 쓰고 옮긴다 — 감시 쪽이 반쯤 써진 파일을 읽는 것을 막는다.
+        tmp = CTL_REQUEST + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            fh.write(action + '\n')
+        os.replace(tmp, CTL_REQUEST)
+        return True, ''
+    except OSError as e:
+        return False, str(e)
+
+
+def ctl_read():
+    """감시 프로세스의 상태를 (상태, 문구) 로 준다.
+
+    파일이 없으면 감시 프로세스가 안 떠 있다는 뜻이다 — 그때 버튼을
+    눌러도 아무 일도 안 일어나므로, 화면에서 미리 알려줘야 한다.
+    """
+    try:
+        with open(CTL_STATUS, encoding='utf-8') as fh:
+            line = fh.read().strip()
+    except OSError:
+        return 'absent', '감시 프로세스 미실행 (tools/supervisor.sh --daemon)'
+    kind, _, text = line.partition('|')
+    return (kind or 'idle'), (text or '대기 중')
+
 
 class DashboardNode(Node):
     def __init__(self):
@@ -82,6 +120,10 @@ class DashboardNode(Node):
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
         self.create_subscription(CompressedImage, "/webcam/image_raw/compressed",
                                  self.on_frame, qos_profile_sensor_data)
+        # 후면 CSI. 카메라가 안 떠 있으면 그냥 프레임이 안 올 뿐,
+        # 페이지는 "영상 없음" 으로 뜨고 나머지 기능은 그대로 돈다.
+        self.create_subscription(CompressedImage, "/csi/image_raw/compressed",
+                                 self.on_frame_rear, qos_profile_sensor_data)
         self.create_subscription(String, "/restricted/status", self.on_status, qos)
         self.create_subscription(String, "/fire/status", self.on_fire, qos)
         self.create_subscription(String, "/helmet/status", self.on_helmet, qos)
@@ -90,6 +132,9 @@ class DashboardNode(Node):
         self.pub_teleop = self.create_publisher(Twist, TELEOP_TOPIC, qos)
         # 작업자가 웹에서 작업금지 감시 모드를 바꾼다(auto | on | off)
         self.pub_mode = self.create_publisher(String, "/restricted/mode", qos)
+        # 재시작 감시용. 감시 프로세스의 상태가 바뀌는 순간을 잡는다.
+        self._ctl_prev = None
+        self.create_timer(2.0, self.watch_restart)
         # 화재 시연/수동 해제용
         self.pub_fire_trigger = self.create_publisher(Bool, "/fire/trigger", qos)
         # 감지 기능 켜고 끄기 (작업자가 웹에서 직접)
@@ -111,6 +156,11 @@ class DashboardNode(Node):
         with state_lock:
             state["frame"] = bytes(msg.data)
             state["frame_at"] = time.time()
+
+    def on_frame_rear(self, msg):
+        with state_lock:
+            state["frame_rear"] = bytes(msg.data)
+            state["frame_rear_at"] = time.time()
 
     def on_status(self, msg):
         with state_lock:
@@ -182,6 +232,19 @@ class DashboardNode(Node):
             self.pub_helmet_enable.publish(m)
         elif what == "speaker":
             self.pub_speaker_enable.publish(m)
+
+    def watch_restart(self):
+        """재시작이 끝나면 감지 기능을 켠다.
+
+        갓 뜬 노드에 켜라고 미리 보내두면 구독자가 아직 없어서 그냥 버려진다.
+        그래서 감시 프로세스가 running 에서 done 으로 넘어가는 순간에 보낸다.
+        """
+        kind, _ = ctl_read()
+        prev = self._ctl_prev
+        self._ctl_prev = kind
+        if prev == 'running' and kind == 'done':
+            self.get_logger().info('재시작 완료 — 감지 기능을 다시 켠다')
+            self.send_start_all(True)
 
     def send_start_all(self, on):
         """감지 기능을 한꺼번에 켜거나 끈다(시동 / 전체 정지).
@@ -346,6 +409,8 @@ def build_status():
                    "blocked": fresh("safety")
                               and snap["safety_status"].startswith("blocked")},
         "camera_age_sec": age("frame"),
+        "ctl": dict(zip(("kind", "text"), ctl_read())),
+        "camera_rear_age_sec": age("frame_rear"),
         "res": read_resources(),
     }
 
@@ -477,20 +542,40 @@ PAGE_TMPL = """<!doctype html>
                 animation: flash 1.3s infinite; }
   @keyframes flash { 50% { filter: brightness(0.9); } }
 
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 14px 16px; }
+  .grid { display: grid; grid-template-columns: 2.3fr 1fr; gap: 14px;
+          padding: 14px 16px; align-items: start; }
   .card { background: #fff; border-radius: 10px; padding: 15px;
           box-shadow: 0 1px 3px rgba(0,0,0,0.09); }
   .card h2 { margin: 0 0 10px; font-size: 14px; color: #57606a;
              text-transform: uppercase; letter-spacing: 0.4px; }
   .wide { grid-column: 1 / -1; }
-  #camimg { width: 100%; border-radius: 6px; background: #ddd; display: block; }
+  #camimg, #camimgrear { width: 100%; border-radius: 6px; background: #ddd;
+                         display: block; }
+  .ctlrow { display: flex; align-items: center; gap: 8px; margin-top: 8px;
+            flex-wrap: wrap; }
+  .smallbtn { padding: 5px 10px; font-size: 12px; border: 1px solid #bbb;
+              border-radius: 5px; background: #fff; cursor: pointer; }
+  .smallbtn:hover { background: #f0f0f0; }
+  .ctlstat { font-size: 12px; color: #555; }
+  .ctlstat.run { color: #b45309; font-weight: 700; }
+  .ctlstat.err { color: #b00020; font-weight: 700; }
+  .camwrap { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  /* 아주 넓은 화면에서만 좌우로. 그보다 좁으면 나누는 순간
+     각 화면이 절반이 되어 '크게 보자'는 목적과 반대가 된다. */
+  @media (min-width: 2200px) { .camwrap { grid-template-columns: 1fr 1fr; } }
+  .camlabel { font-size: 12px; font-weight: 700; margin: 0 0 4px; color: #333; }
 
   /* ---------- 작업금지 모드 제어 ---------- */
-  .moderow { display: flex; gap: 8px; margin-bottom: 10px; }
-  .modebtn { flex: 1; padding: 11px 8px; border: 1px solid #d0d7de; background: #f6f8fa;
+  .moderow { display: flex; gap: 6px; margin-bottom: 6px; }
+  .modebtn { flex: 1; padding: 8px 6px; border: 1px solid #d0d7de; background: #f6f8fa;
              border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; }
   .modebtn.active { background: #16191d; color: #fff; border-color: #16191d; }
-  .modehint { font-size: 12px; color: #57606a; line-height: 1.6; }
+  .modehint { font-size: 11px; color: #57606a; line-height: 1.5; }
+  /* 좁은 칸에 카드가 여러 개 겹쳐 들어가므로 제목 위 여백을 줄인다 */
+  .card h2 + .moderow { margin-top: 0; }
+  .compact h2 { margin: 12px 0 6px; }
+  .compact h2:first-child { margin-top: 0; }
+  .compact .modehint { margin-bottom: 2px; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 99px;
            font-size: 11px; font-weight: 700; }
   .badge.on { background: #ffe3e3; color: #8b0f16; }
@@ -557,8 +642,13 @@ PAGE_TMPL = """<!doctype html>
       <div class="resitem"><span class="reslabel">MEM</span>
         <span class="bar"><i id="bar-mem"></i></span><span class="resval" id="v-mem">–</span></div>
     </div>
-    <button id="startall" class="bigbtn go">▶ 전체 시동</button>
+    <button id="startall" class="bigbtn go">▶ 전체 시동 (재시작)</button>
     <button id="stopall" class="bigbtn stop">■ 전체 정지</button>
+    <div class="ctlrow">
+      <button id="enableall" class="smallbtn">감지만 켜기</button>
+      <button id="disableall" class="smallbtn">감지만 끄기</button>
+      <span class="ctlstat" id="ctlstat">확인 중...</span>
+    </div>
     <div class="clock" id="clock">--:--:--</div>
   </div>
 </header>
@@ -586,11 +676,21 @@ PAGE_TMPL = """<!doctype html>
 <div class="grid">
   <div class="card">
     <h2>실시간 카메라</h2>
-    <img id="camimg" src="/snapshot.jpg" alt="카메라 로딩 중...">
-    <div class="note" id="camnote"></div>
+    <div class="camwrap">
+      <div>
+        <div class="camlabel">전면 · 웹캠 (진행방향)</div>
+        <img id="camimg" src="/snapshot.jpg" alt="전면 카메라 로딩 중...">
+        <div class="note" id="camnote"></div>
+      </div>
+      <div>
+        <div class="camlabel">후면 · CSI (소화기 점검)</div>
+        <img id="camimgrear" src="/snapshot_rear.jpg" alt="후면 카메라 로딩 중...">
+        <div class="note" id="camnoterear"></div>
+      </div>
+    </div>
   </div>
 
-  <div class="card">
+  <div class="card compact">
     <h2>작업금지구역 감시</h2>
     <div class="moderow">
       <button class="modebtn" data-mode="auto" id="m-auto">자동 (시간표)</button>
@@ -821,11 +921,29 @@ function refreshStatus() {
       (d.inspect && d.inspect.age_sec >= 0) ? d.inspect.text : '점검 노드 미실행';
     document.getElementById('camnote').textContent =
       d.camera_age_sec >= 0 ? ('영상 ' + d.camera_age_sec.toFixed(1) + '초 전') : '영상 없음';
+    if (d.ctl) {
+      const el = document.getElementById('ctlstat');
+      el.textContent = d.ctl.text;
+      el.className = 'ctlstat'
+        + (d.ctl.kind === 'running' ? ' run'
+           : (d.ctl.kind === 'error' || d.ctl.kind === 'absent') ? ' err' : '');
+    }
+    document.getElementById('camnoterear').textContent =
+      d.camera_rear_age_sec >= 0
+        ? ('영상 ' + d.camera_rear_age_sec.toFixed(1) + '초 전')
+        : 'CSI 카메라 미실행 (로봇에서 csi_camera.sh)';
   }).catch(() => {});
 }
 
+let camTick = 0;
 function refreshCam() {
-  document.getElementById('camimg').src = '/snapshot.jpg?t=' + Date.now();
+  const t = Date.now();
+  document.getElementById('camimg').src = '/snapshot.jpg?t=' + t;
+  // 후면 CSI 는 원본이 5~8fps 다. 전면과 같은 주기로 당기면 같은 그림을
+  // 두 번 받아 무선 대역만 먹는다.
+  if (++camTick % 2 === 0) {
+    document.getElementById('camimgrear').src = '/snapshot_rear.jpg?t=' + t;
+  }
 }
 
 function refreshGallery(kind, elId, emptyMsg) {
@@ -1021,10 +1139,18 @@ document.getElementById('insp-now').addEventListener('click', () => {
   post('/api/inspect_now', {}).then(pollFast);
 });
 document.getElementById('startall').addEventListener('click', () => {
-  post('/api/start_all', {on: true}).then(pollFast);
+  if (!confirm('모든 노드를 재시작합니다 (약 40초).\\n\\n카메라·센서·감지 노드를 전부 껐다 다시 켭니다. 계속하시겠습니까?')) return;
+  post('/api/restart_all', {action: 'restart'}).then(pollFast);
 });
 document.getElementById('stopall').addEventListener('click', () => {
-  if (!confirm('모든 감지를 정지합니다. 계속하시겠습니까?')) return;
+  if (!confirm('모든 노드를 정지합니다.\\n\\n웹페이지만 남고 카메라·센서·감지가 전부 꺼집니다. 계속하시겠습니까?')) return;
+  post('/api/restart_all', {action: 'stop'}).then(pollFast);
+});
+// 프로세스는 그대로 두고 감지만 껐다 켠다 — 즉시 반응한다.
+document.getElementById('enableall').addEventListener('click', () => {
+  post('/api/start_all', {on: true}).then(pollFast);
+});
+document.getElementById('disableall').addEventListener('click', () => {
   post('/api/start_all', {on: false}).then(pollFast);
 });
 document.getElementById('f-on').addEventListener('click', () => {
@@ -1121,6 +1247,13 @@ class Handler(BaseHTTPRequestHandler):
                 frame = state["frame"]
             if frame is None:
                 self._send(503, "text/plain", b"no frame yet")
+            else:
+                self._send(200, "image/jpeg", frame)
+        elif self.path.startswith("/snapshot_rear.jpg"):
+            with state_lock:
+                frame = state["frame_rear"]
+            if frame is None:
+                self._send(503, "text/plain", b"no rear frame yet")
             else:
                 self._send(200, "image/jpeg", frame)
         elif self.path.startswith("/api/status"):
@@ -1223,6 +1356,25 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.startswith("/api/inspect_now"):
             self.rfile.read(int(self.headers.get("Content-Length", 0)) or 0)
             _dashboard_node.send_inspect_now()
+            self._send(200, "application/json", b'{"ok": true}')
+        elif self.path.startswith("/api/restart_all"):
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                data = json.loads(self.rfile.read(length) or b"{}")
+                action = str(data.get("action", ""))
+            except (ValueError, json.JSONDecodeError):
+                self._send(400, "text/plain", b"bad request")
+                return
+            # 받을 동작을 딱 두 개로 못 박는다. 웹에서 온 문자열이
+            # 그대로 셸로 흘러가지 않게 하는 게 핵심이다.
+            if action not in ("restart", "stop"):
+                self._send(400, "text/plain", b"unknown action")
+                return
+            okw, err = ctl_write(action)
+            if not okw:
+                self._send(500, "application/json",
+                           json.dumps({"ok": False, "error": err}).encode())
+                return
             self._send(200, "application/json", b'{"ok": true}')
         elif self.path.startswith("/api/start_all"):
             length = int(self.headers.get("Content-Length", 0))
