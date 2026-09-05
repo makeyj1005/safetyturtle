@@ -244,8 +244,14 @@ run_node restricted_node gpu \
 
 # manage_camera:=false 가 중요하다: true 면 helmet_node 가 ssh 로 로봇 웹캠을
 # 띄우려 하는데, 컨테이너에 ssh 키가 없어 실패한다. 웹캠은 위에서 이미 띄웠다.
-run_node helmet_node cpu \
-    "ros2 run patrol_core helmet_node --ros-args -p method:=color \
+# [2026-09-05] color(초록테이프) -> yolo(학습모델) 로 바꿨다.
+# color 는 안전모에 붙인 초록 테이프를 찾는 방식이라, 테이프 없는 흰색
+# 안전모를 쓰면 초록 비율이 0.000 이 나와 착용 중인데도 미착용으로 찍힌다.
+# detector:=yolo 도 함께 준다 — gpu 이미지의 OpenCV 에는
+# readNetFromCaffe 가 없어서 기존 사람 감지(MobileNet-SSD)를 못 쓴다.
+run_node helmet_node gpu \
+    "ros2 run patrol_core helmet_node --ros-args -p detector:=yolo \
+     -p method:=yolo -p yolo_device:=cuda:0 \
      -p manage_camera:=false -p sound:=false -p hold:=false"
 
 run_node extinguisher_node cpu "ros2 run patrol_core extinguisher_expiry_node"
@@ -258,9 +264,10 @@ if [ "$WITH_REAR" = "1" ]; then
     ssh "${SSH_OPTS[@]}" "$ROBOT" \
         "~/launch/csi_camera.sh $CSI_W $CSI_H $CSI_FPS" 2>&1 | sed 's/^/  /'
 
-    run_node helmet_rear_node cpu \
+    run_node helmet_rear_node gpu \
         "ros2 run patrol_core helmet_node --ros-args -r __node:=helmet_node_rear \
-         -p topic:=/csi/image_raw/compressed -p method:=color \
+         -p topic:=/csi/image_raw/compressed -p detector:=yolo \
+         -p method:=yolo -p yolo_device:=cuda:0 \
          -p manage_camera:=false -p sound:=false -p hold:=false \
          -p status_topic:=/helmet_rear/status -p evidence_prefix:=helmet_rear \
          -p db_node_name:=helmet_node_rear"

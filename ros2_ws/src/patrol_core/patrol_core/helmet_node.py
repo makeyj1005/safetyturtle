@@ -127,8 +127,16 @@ class HelmetNode(Node):
         super().__init__("helmet_node")
 
         self.declare_parameter("topic", "/webcam/image_raw/compressed")
-        # auto | dnn | hog  (auto = 모델 파일이 있으면 dnn)
+        # auto | dnn | hog | yolo   (auto = 모델 파일이 있으면 dnn)
+        # yolo 는 사람 감지도 YOLO 로 한다. patrol-ros2:gpu 이미지에서 쓴다 —
+        # 그 이미지의 OpenCV 에는 readNetFromCaffe 가 없어서 dnn 을 못 쓴다.
         self.declare_parameter("detector", "auto")
+        # 사람 감지용 모델. **안전모 모델과 다른 파일이다.**
+        # 안전모 전용 모델은 전신 사진으로 학습돼서 얼굴이 크게 나오는 화면의
+        # person 을 거의 못 잡는다(2026-08-29 실측). 그래서 사람은 일반 COCO
+        # 모델로 찾고, 안전모 판정만 학습 모델로 한다.
+        self.declare_parameter("person_model_path",
+                               os.path.join(DEFAULT_MODEL_DIR, "yolov8n_coco.pt"))
         self.declare_parameter("model_dir", DEFAULT_MODEL_DIR)
         # 사람으로 인정할 최소 확신도. 낮추면 벽·의자를 사람으로 보기 시작한다.
         self.declare_parameter("person_conf", 0.5)
@@ -400,9 +408,13 @@ class HelmetNode(Node):
         self.yield_cpu()
         self.net = None
         self.hog = None
+        # 사람 감지용 YOLO 는 setup_detector() 안에서 채워진다.
+        # **반드시 그 호출보다 먼저** None 으로 둔다 — 뒤에 두면 방금 로드한
+        # 모델을 None 으로 덮어써서 첫 프레임에서 바로 터진다.
+        self.person_yolo = None
         self.detector = self.setup_detector()
         self.ranges, self.range_src = self.load_ranges()
-        self.yolo_model = None
+        self.yolo_model = None        # 안전모 판정용
         if str(self.get_parameter("method").value) == "yolo":
             self.yolo_model = self.setup_yolo()
         self.faces = self.setup_faces()
@@ -532,6 +544,27 @@ class HelmetNode(Node):
 
     def setup_detector(self):
         want = str(self.get_parameter("detector").value)
+
+        if want == "yolo":
+            path = str(self.get_parameter("person_model_path").value)
+            if not os.path.exists(path):
+                self.get_logger().error(
+                    f"detector:=yolo 인데 사람 감지 모델이 없다 — {path}")
+                raise SystemExit(1)
+            try:
+                from ultralytics import YOLO
+            except ImportError:
+                self.get_logger().error(
+                    "detector:=yolo 인데 ultralytics 가 없다 — "
+                    "patrol-ros2:gpu 이미지에서 실행할 것")
+                raise SystemExit(1)
+            # 안전모 판정용 self.yolo_model 과 **다른 변수**에 담는다.
+            # 같은 이름을 쓰면 나중에 로드되는 쪽이 앞의 것을 덮어써서,
+            # 사람은 안전모 모델로 찾고 안전모는 COCO 로 판정하는 꼴이 된다.
+            self.person_yolo = YOLO(path)
+            self.get_logger().info(f"사람 감지 YOLO 로드: {path}")
+            return "yolo"
+
         mdir = str(self.get_parameter("model_dir").value)
         proto, model = os.path.join(mdir, DNN_PROTO), os.path.join(mdir, DNN_MODEL)
         have = os.path.exists(proto) and os.path.exists(model)
@@ -892,6 +925,22 @@ class HelmetNode(Node):
         h, w = frame.shape[:2]
         min_h = float(self.get_parameter("min_person_ratio").value) * h
         out = []
+
+        if self.detector == "yolo":
+            conf_min = float(self.get_parameter("person_conf").value)
+            results = self.person_yolo.predict(
+                frame, conf=conf_min,
+                device=str(self.get_parameter("yolo_device").value),
+                verbose=False)
+            names = self.person_yolo.names
+            for b in results[0].boxes:
+                if names[int(b.cls)] != "person":
+                    continue
+                x1, y1, x2, y2 = [int(v) for v in b.xyxy[0]]
+                if y2 - y1 >= min_h:
+                    out.append(((max(x1, 0), max(y1, 0), min(x2, w), min(y2, h)),
+                                float(b.conf)))
+            return out
 
         if self.detector == "dnn":
             blob = cv2.dnn.blobFromImage(

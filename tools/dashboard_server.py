@@ -31,7 +31,7 @@ import rclpy                                    # noqa: E402
 from geometry_msgs.msg import Twist             # noqa: E402
 from rclpy.node import Node                     # noqa: E402
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy  # noqa: E402
-from sensor_msgs.msg import CompressedImage     # noqa: E402
+from sensor_msgs.msg import BatteryState, CompressedImage     # noqa: E402
 from std_msgs.msg import Bool, String           # noqa: E402
 
 from patrol_core import event_log               # noqa: E402
@@ -54,6 +54,9 @@ state = {
     "frame_at": 0.0,
     "frame_rear": None,      # 최신 jpeg 바이트 (후면 CSI)
     "frame_rear_at": 0.0,
+    "batt_v": None,          # 로봇 배터리 전압(V)
+    "batt_pct": None,        # 로봇 배터리 잔량(%)
+    "batt_v_at": 0.0,   # age() 가 "<키>_at" 을 찾으므로 batt_v 에 맞춘 이름이다
     "restricted_status": "(아직 없음)",
     "restricted_at": 0.0,
     "fire_status": "(아직 없음)",
@@ -124,6 +127,10 @@ class DashboardNode(Node):
         # 페이지는 "영상 없음" 으로 뜨고 나머지 기능은 그대로 돈다.
         self.create_subscription(CompressedImage, "/csi/image_raw/compressed",
                                  self.on_frame_rear, qos_profile_sensor_data)
+        # 배터리는 bringup(turtlebot3_node)이 낸다. bringup 이 죽으면 이 토픽도
+        # 끊기므로, 화면에 '–' 가 뜨는 것 자체가 로봇 상태 신호가 된다.
+        self.create_subscription(BatteryState, "/battery_state",
+                                 self.on_battery, qos_profile_sensor_data)
         self.create_subscription(String, "/restricted/status", self.on_status, qos)
         self.create_subscription(String, "/fire/status", self.on_fire, qos)
         self.create_subscription(String, "/helmet/status", self.on_helmet, qos)
@@ -161,6 +168,12 @@ class DashboardNode(Node):
         with state_lock:
             state["frame_rear"] = bytes(msg.data)
             state["frame_rear_at"] = time.time()
+
+    def on_battery(self, msg):
+        with state_lock:
+            state["batt_v"] = float(msg.voltage)
+            state["batt_pct"] = float(msg.percentage)
+            state["batt_v_at"] = time.time()
 
     def on_status(self, msg):
         with state_lock:
@@ -411,6 +424,9 @@ def build_status():
         "camera_age_sec": age("frame"),
         "ctl": dict(zip(("kind", "text"), ctl_read())),
         "camera_rear_age_sec": age("frame_rear"),
+        "battery": {"voltage": snap["batt_v"],
+                    "percent": snap["batt_pct"],
+                    "age_sec": age("batt_v")},
         "res": read_resources(),
     }
 
@@ -516,6 +532,10 @@ PAGE_TMPL = """<!doctype html>
   .bar i.mid { background: #d29922; }
   .bar i.hot { background: #f85149; }
   .resval { font-variant-numeric: tabular-nums; width: 30px; text-align: right; }
+  .resval.wide { width: 74px; }
+  /* 배터리가 바닥나면 눈에 띄어야 한다 — 발표 중에 로봇이 서면 답이 없다 */
+  @keyframes battblink { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  #battitem.low { animation: battblink 1s infinite; }
   @media (max-width: 900px) { .res { display: none; } }
 
   .bigbtn { padding: 9px 16px; border: none; border-radius: 8px; cursor: pointer;
@@ -641,6 +661,8 @@ PAGE_TMPL = """<!doctype html>
         <span class="bar"><i id="bar-gpu"></i></span><span class="resval" id="v-gpu">–</span></div>
       <div class="resitem"><span class="reslabel">MEM</span>
         <span class="bar"><i id="bar-mem"></i></span><span class="resval" id="v-mem">–</span></div>
+      <div class="resitem" id="battitem"><span class="reslabel">🔋</span>
+        <span class="bar"><i id="bar-batt"></i></span><span class="resval wide" id="v-batt">–</span></div>
     </div>
     <button id="startall" class="bigbtn go">▶ 전체 시동 (재시작)</button>
     <button id="stopall" class="bigbtn stop">■ 전체 정지</button>
@@ -910,6 +932,35 @@ function refreshStatus() {
     setBar('bar-cpu', 'v-cpu', r.cpu);
     setBar('bar-gpu', 'v-gpu', r.gpu);
     setBar('bar-mem', 'v-mem', r.mem);
+
+    // 배터리는 자원 게이지와 반대다 — **낮을수록** 위험하므로 색 기준을 뒤집는다.
+    // 기준은 전압으로 잡는다. 퍼센트는 펌웨어가 전압을 선형 변환한 값이라
+    // 결국 같지만, 사람이 판단할 때 쓰는 숫자가 전압이라 그쪽에 맞춘다.
+    //   12.0V 이상 넉넉 / 11.5~12.0 보통 / 11.0~11.5 부족 / 11.0 미만 위험
+    // (터틀봇3 3셀 리포는 11.0V 부근에서 경고음을 낸다)
+    const b = d.battery || {};
+    const bBar = document.getElementById('bar-batt');
+    const bLab = document.getElementById('v-batt');
+    const bItem = document.getElementById('battitem');
+    if (b.voltage === null || b.voltage === undefined || b.age_sec < 0 || b.age_sec > 15) {
+      // bringup 이 죽으면 이 토픽부터 끊긴다. 옛 값을 계속 띄우면
+      // 배터리가 멀쩡한 줄 알고 넘어가게 된다.
+      bBar.style.width = '0%'; bBar.className = '';
+      bLab.textContent = '–';
+      bItem.classList.remove('low');
+      bItem.title = '배터리 정보 없음 (bringup 확인)';
+    } else {
+      const v = b.voltage;
+      const pct = (b.percent === null || b.percent === undefined)
+        ? Math.max(0, Math.min(100, (v - 10.5) / (12.3 - 10.5) * 100))
+        : b.percent;
+      bBar.style.width = Math.max(2, Math.min(100, pct)) + '%';
+      bBar.className = v < 11.0 ? 'hot' : (v < 11.5 ? 'mid' : '');
+      bLab.textContent = pct.toFixed(0) + '% ' + v.toFixed(2) + 'V';
+      bItem.classList.toggle('low', v < 11.0);
+      bItem.title = '로봇 배터리 ' + v.toFixed(2) + 'V (' + pct.toFixed(0) + '%)\n'
+        + '12.0V 이상 넉넉 / 11.5~12.0 보통 / 11.0~11.5 부족 / 11.0 미만 충전 필요';
+    }
     const rb = document.getElementById('resbox');
     if (rb) {
       rb.title = 'CPU ' + (r.cores || '?') + '코어, load ' + (r.load ?? '?') +
