@@ -52,8 +52,28 @@ class CmdVelMux(Node):
         self.declare_parameter("rate", 20.0)
         # 안전 상한. 어떤 입력이 들어와도 이 값을 넘겨 발행하지 않는다.
         # 절대 규칙은 아니지만, 잘못된 노드 하나가 로봇을 폭주시키는 것을 막는다.
-        self.declare_parameter("max_linear", 0.15)
-        self.declare_parameter("max_angular", 1.2)
+        self.declare_parameter("max_linear", 0.12)
+        self.declare_parameter("max_angular", 1.0)
+
+        # --- 가감속 제한 (2026-09-05 추가) ---
+        # [왜 넣었나] 로봇을 수동으로 조작하면 로봇이 통째로 와이파이에서
+        # 사라지는 일이 반복됐다(ssh 도 'No route to host'). 파이는 재부팅되지
+        # 않았고 저전압 기록(throttled)도 0 이었다 — 즉 파이가 죽은 게 아니라
+        # SDIO 로 붙은 와이파이 칩만 순간적으로 흔들린 것이다.
+        # 원인은 모터 기동 전류다. 정지 상태에서 곧바로 목표 속도를 명령하면
+        # (20Hz 주기에서 0 -> 0.10 은 한 틱 만의 계단 입력이다) 그 순간
+        # 스톨에 가까운 전류가 흐르고, 배터리 전압이 푹 꺼진다.
+        # 속도를 서서히 올리면 같은 속도까지 가면서도 첨두 전류가 크게 준다.
+        #
+        # ⚠️ 이건 증상 완화지 근본 해결이 아니다. 배터리가 반쯤 닳아 있으면
+        #    (11.4V 부근) 전압 여유가 없어 결국 같은 일이 난다. 충전이 우선이다.
+        #
+        # 단위는 m/s^2, rad/s^2. 0 이하로 주면 제한하지 않는다.
+        self.declare_parameter("max_accel_linear", 0.15)
+        self.declare_parameter("max_accel_angular", 1.5)
+        # 멈출 때는 더 빨리 줄여도 된다 — 감속은 전류를 끌어가지 않고,
+        # 오히려 천천히 멈추면 '안 서네' 하고 놀라 안전에 나쁘다.
+        self.declare_parameter("decel_scale", 3.0)
 
         # --- 라이다 충돌 방지 (2026-09-04 추가) ---
         # 진행 방향에 이 거리(m) 안쪽으로 뭔가 있으면 그 방향 직진을 막는다.
@@ -93,6 +113,9 @@ class CmdVelMux(Node):
         self.create_subscription(LaserScan, "/scan", self.on_scan,
                                  qos_profile_sensor_data)
 
+        # 직전에 실제로 내보낸 속도. 여기서부터 서서히 목표로 옮겨간다.
+        self._out_x = 0.0
+        self._out_z = 0.0
         self._scan = None
         self._scan_at = 0.0
         self._prev_block = None
@@ -162,6 +185,23 @@ class CmdVelMux(Node):
             return True, f"{where} {dist:.2f}m (기준 {stop:.2f}m)"
         return False, ""
 
+    def ramp(self, cur, target, accel, dt):
+        """cur 에서 target 으로 dt 동안 갈 수 있는 만큼만 옮긴다.
+
+        가속(0 에서 멀어지는 방향)은 accel 로, 감속(0 에 가까워지는 방향)은
+        decel_scale 배 빠르게 허용한다. 부호가 바뀌는 명령(전진->후진)은
+        일단 0 을 지나가므로 자연히 감속->가속 순서가 된다.
+        """
+        if accel <= 0.0:
+            return target              # 제한 없음
+        speeding = abs(target) > abs(cur) and (target * cur >= 0)
+        rate = accel if speeding else accel * float(
+            self.get_parameter("decel_scale").value)
+        step = rate * dt
+        if target > cur:
+            return min(cur + step, target)
+        return max(cur - step, target)
+
     def on_enable(self, msg: Bool):
         self._enabled = bool(msg.data)
         self.get_logger().warn(f"/mux/enable = {self._enabled}" + ("" if self._enabled else " (정지)"))
@@ -192,6 +232,25 @@ class CmdVelMux(Node):
         blocked, why = self.safety_block(t.linear.x)
         if blocked:
             t.linear.x = 0.0
+
+        # 가감속 제한. 안전 정지 판정 **뒤에** 둔다 — 앞에 두면 램프가
+        # 만들어 낸 중간값을 가지고 장애물 판정을 하게 되어, 멈추라는
+        # 명령이 한 틱 늦게 반영된다.
+        dt = 1.0 / float(self.get_parameter("rate").value)
+        self._out_x = self.ramp(
+            self._out_x, t.linear.x,
+            float(self.get_parameter("max_accel_linear").value), dt)
+        self._out_z = self.ramp(
+            self._out_z, t.angular.z,
+            float(self.get_parameter("max_accel_angular").value), dt)
+        # 아주 작은 값은 0 으로 떨어뜨린다. 안 그러면 0.0001 같은 값이
+        # 남아 모터가 미세하게 떨고 데드맨 정지가 안 된 것처럼 보인다.
+        if abs(self._out_x) < 1e-3:
+            self._out_x = 0.0
+        if abs(self._out_z) < 1e-3:
+            self._out_z = 0.0
+        t.linear.x = self._out_x
+        t.angular.z = self._out_z
         if why != self._prev_block:
             self._prev_block = why
             if blocked:
