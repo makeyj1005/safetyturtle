@@ -1525,6 +1525,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # 페이지와 상태를 절대 캐시하지 않는다.
+        # 이걸 안 걸어두면, 대시보드를 고쳐서 다시 띄워도 브라우저가
+        # 예전 HTML 을 그대로 꺼내 쓴다. 특히 JS 가 죽어 있던 버전이
+        # 캐시돼 있으면 카메라가 첫 한 장에서 영원히 멈춘 것처럼 보여서,
+        # 서버를 아무리 고쳐도 증상이 그대로다(2026-09-05 에 이걸로 헤맸다).
+        # 사진(/photo/...)은 파일명이 고유해서 캐시돼도 문제없지만,
+        # 한 곳에서 다 내보내므로 그냥 전부 끈다 — 전부 로컬이라 비용이 없다.
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(body)
 
