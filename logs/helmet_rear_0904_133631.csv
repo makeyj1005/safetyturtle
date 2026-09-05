@@ -1,3 +1,25 @@
 time,verdict,persons,helmet_ratio,conf,box,head,detector,held,image
 2026-09-04 13:39:44,미착용,1,0.000,1.00,217-51-1235-1225,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/133944_bad.jpg
 2026-09-04 13:39:53,미착용,1,0.000,0.88,1050-374-1315-774,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/133953_bad.jpg
+2026-09-04 13:40:16,미착용,1,0.000,0.66,1050-377-1306-762,box,dnn,,/root/vibe/ex1/logs/helmet_rear_0904_133631/134016_bad.jpg
+2026-09-04 13:40:19,미착용,1,0.000,0.68,1051-373-1305-746,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134019_bad.jpg
+2026-09-04 13:40:26,미착용,1,0.000,0.78,1047-376-1308-753,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134026_bad.jpg
+2026-09-04 13:40:30,미착용,1,0.000,0.75,1051-373-1297-743,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134030_bad.jpg
+2026-09-04 13:40:35,미착용,1,0.000,0.79,1050-376-1299-753,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134035_bad.jpg
+2026-09-04 13:40:39,미착용,1,0.000,0.78,1050-371-1306-757,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134039_bad.jpg
+2026-09-04 13:40:43,미착용,1,0.001,0.77,1049-371-1311-755,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134043_bad.jpg
+2026-09-04 13:40:46,미착용,1,0.000,0.73,1053-377-1302-749,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134046_bad.jpg
+2026-09-04 13:40:50,미착용,1,0.000,0.63,1050-373-1302-758,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134050_bad.jpg
+2026-09-04 13:40:53,미착용,1,0.000,0.74,1044-377-1305-756,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134053_bad.jpg
+2026-09-04 13:40:56,미착용,1,0.000,0.76,1051-376-1305-748,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134056_bad.jpg
+2026-09-04 13:40:59,미착용,1,0.000,0.74,1051-377-1305-747,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134059_bad.jpg
+2026-09-04 13:41:03,미착용,1,0.000,0.68,1048-379-1302-753,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134103_bad.jpg
+2026-09-04 13:41:06,미착용,1,0.000,0.67,1049-375-1301-761,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134106_bad.jpg
+2026-09-04 13:41:25,미착용,1,0.000,0.69,1047-369-1310-756,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134125_bad.jpg
+2026-09-04 13:41:28,미착용,1,0.000,0.85,1048-369-1304-750,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134128_bad.jpg
+2026-09-04 13:41:33,미착용,1,0.000,0.70,1040-375-1292-759,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134133_bad.jpg
+2026-09-04 13:41:36,미착용,1,0.000,0.72,1042-369-1288-783,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134136_bad.jpg
+2026-09-04 13:41:39,미착용,1,0.000,0.56,1049-374-1298-744,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134139_bad.jpg
+2026-09-04 13:41:43,미착용,1,0.000,0.75,1048-372-1302-746,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134143_bad.jpg
+2026-09-04 13:41:46,미착용,1,0.000,0.68,1046-370-1306-753,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134146_bad.jpg
+2026-09-04 13:41:51,미착용,1,0.000,0.67,1042-372-1300-750,box,dnn,Y,/root/vibe/ex1/logs/helmet_rear_0904_133631/134151_bad.jpg

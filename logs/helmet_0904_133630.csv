@@ -1,2 +1,17 @@
 time,verdict,persons,helmet_ratio,conf,box,head,detector,held,image
 2026-09-04 13:37:13,미착용,1,0.000,0.89,9-211-571-720,box,dnn,Y,/root/vibe/ex1/logs/helmet_0904_133630/133713_bad.jpg
+2026-09-04 13:40:49,미착용,1,0.000,0.77,205-18-1275-720,box,dnn,Y,/root/vibe/ex1/logs/helmet_0904_133630/134049_bad.jpg
+2026-09-04 13:41:23,미착용,1,0.000,1.00,672-43-1277-717,box,dnn,Y,/root/vibe/ex1/logs/helmet_0904_133630/134123_bad.jpg
+2026-09-04 13:41:26,미착용,1,0.000,1.00,212-15-1038-715,box,dnn,Y,/root/vibe/ex1/logs/helmet_0904_133630/134126_bad.jpg
+2026-09-04 13:41:37,미착용,1,0.000,0.87,430-58-1275-718,box,dnn,Y,/root/vibe/ex1/logs/helmet_0904_133630/134137_bad.jpg
+2026-09-04 13:41:40,미착용,1,0.000,0.89,319-114-1266-717,box,dnn,Y,/root/vibe/ex1/logs/helmet_0904_133630/134140_bad.jpg
+2026-09-04 13:41:44,미착용,1,0.000,0.90,352-70-1276-720,box,dnn,Y,/root/vibe/ex1/logs/helmet_0904_133630/134144_bad.jpg
+2026-09-04 13:41:50,미착용,1,0.000,0.77,422-113-1280-715,box,dnn,Y,/root/vibe/ex1/logs/helmet_0904_133630/134150_bad.jpg
+2026-09-04 13:41:54,미착용,1,0.000,0.69,349-67-1274-714,box,dnn,Y,/root/vibe/ex1/logs/helmet_0904_133630/134154_bad.jpg
+2026-09-04 13:41:58,미착용,1,0.000,0.88,327-59-1274-715,box,dnn,Y,/root/vibe/ex1/logs/helmet_0904_133630/134158_bad.jpg
+2026-09-04 13:42:03,미착용,1,0.000,0.66,190-116-1268-719,box,dnn,Y,/root/vibe/ex1/logs/helmet_0904_133630/134203_bad.jpg
+2026-09-04 13:42:35,미착용,1,0.000,0.90,365-84-1270-716,box,dnn,Y,/root/vibe/ex1/logs/helmet_0904_133630/134235_bad.jpg
+2026-09-04 13:42:39,미착용,1,0.000,1.00,552-128-1278-719,box,dnn,Y,/root/vibe/ex1/logs/helmet_0904_133630/134239_bad.jpg
+2026-09-04 13:42:47,미착용,1,0.000,0.55,0-7-472-716,box,dnn,,/root/vibe/ex1/logs/helmet_0904_133630/134247_bad.jpg
+2026-09-04 13:42:51,미착용,1,0.000,0.71,7-7-557-720,box,dnn,Y,/root/vibe/ex1/logs/helmet_0904_133630/134251_bad.jpg
+2026-09-04 13:43:00,미착용,1,0.000,0.92,583-33-1275-717,box,dnn,Y,/root/vibe/ex1/logs/helmet_0904_133630/134300_bad.jpg

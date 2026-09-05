@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  fastdds_wifi.xml — Fast-DDS 가 와이파이 인터페이스만 쓰도록 묶는다.
+
+  [왜 필요한가 — 2026-09-05 실측]
+  이 노트북에는 도커가 만든 `docker0`(172.17.0.1) 가 있다. 컨테이너를
+  `--network host` 로 띄우면 Fast-DDS 가 호스트의 **모든** 인터페이스를 후보로
+  잡고, 발견(discovery) 멀티캐스트를 docker0 으로 내보내는 일이 생긴다.
+  그러면 로봇은 노트북을 발견하지 못한다.
+
+  증상이 아주 헷갈린다:
+    - 노트북에서 `ros2 topic list` 는 로봇 토픽이 **다 보인다**(로봇->노트북
+      멀티캐스트는 정상이므로)
+    - 그런데 `ros2 topic hz` 는 어느 토픽이든 **한 장도 안 온다**
+    - 로봇에서 `ros2 node list` 하면 노트북 노드가 **하나도 안 보인다**
+    - 로봇 자체에서는 모든 토픽이 정상(=ROS 는 멀쩡하다)
+    - 순수 UDP 도, 인터페이스를 지정한 멀티캐스트도 양방향 정상(=네트워크도 멀쩡하다)
+  구독자를 발견하지 못하면 발행자가 데이터를 보낼 곳을 모른다. 그래서
+  "토픽은 보이는데 데이터가 없다" 가 된다.
+
+  [주의] 아래 IP 는 노트북의 현재 와이파이 주소여야 한다. DHCP 로 바뀌므로
+  start_all.sh 가 실행할 때마다 이 파일을 다시 만든다
+  (logs/control/fastdds.xml). 이 파일은 그 원본(틀)이고 __WIFI_IP__ 자리에
+  실제 주소가 들어간다. 직접 쓸 일은 없다.
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>wifi_only</transport_id>
+      <type>UDPv4</type>
+      <!-- 이 목록에 있는 인터페이스로만 보내고 받는다. docker0 를 뺀다. -->
+      <interfaceWhiteList>
+        <address>__WIFI_IP__</address>
+      </interfaceWhiteList>
+    </transport_descriptor>
+  </transport_descriptors>
+
+  <participant profile_name="wifi_participant" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>wifi_only</transport_id>
+      </userTransports>
+      <!-- false 로 두면 위에서 정의한 것만 쓴다. true 면 기본 전송이 다시
+           끼어들어 docker0 가 되살아난다. -->
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>
