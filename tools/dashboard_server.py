@@ -17,6 +17,7 @@
 """
 import json
 import os
+import re
 import sqlite3
 import sys
 import threading
@@ -958,7 +959,7 @@ function refreshStatus() {
       bBar.className = v < 11.0 ? 'hot' : (v < 11.5 ? 'mid' : '');
       bLab.textContent = pct.toFixed(0) + '% ' + v.toFixed(2) + 'V';
       bItem.classList.toggle('low', v < 11.0);
-      bItem.title = '로봇 배터리 ' + v.toFixed(2) + 'V (' + pct.toFixed(0) + '%)\n'
+      bItem.title = '로봇 배터리 ' + v.toFixed(2) + 'V (' + pct.toFixed(0) + '%)\\n'
         + '12.0V 이상 넉넉 / 11.5~12.0 보통 / 11.0~11.5 부족 / 11.0 미만 충전 필요';
     }
     const rb = document.getElementById('resbox');
@@ -1509,7 +1510,57 @@ class Handler(BaseHTTPRequestHandler):
 _dashboard_node = None
 
 
+def check_template():
+    """줄이 끝났는데 아직 문자열 안이면 잡아낸다.
+
+    [왜 필요한가 — 2026-09-04, 09-05 두 번 당함]
+    PAGE_TMPL 은 일반(raw 아닌) 삼중 따옴표 문자열이라, 안에 \\n 을 한 번만 쓰면
+    파이썬이 **진짜 줄바꿈**으로 바꿔버린다. JS 문자열 리터럴은 줄을 넘을 수 없어서
+    그 순간 SyntaxError 가 나고 **스크립트 전체가 죽는다**.
+
+    무서운 건 증상이다. HTML·CSS 는 멀쩡히 그려지고 값만 갱신되지 않는다.
+    화면에는 '불러오는 중...' 과 '–' 만 남아서, 서버가 죽은 줄로도 보이고
+    CPU 가 모자란 줄로도 보인다. 서버 API 를 curl 로 찍어보면 정상이라 더 헷갈린다.
+
+    [왜 따옴표 개수를 세지 않는가]
+    처음엔 한 줄의 따옴표가 홀수면 의심하는 방식으로 짰는데, 아래처럼 멀쩡한
+    코드를 잔뜩 잡았다.
+        return '<div class="shot"><img src="/photo/' + enc(r.image) +
+    홑따옴표 문자열 **안에** 쌍따옴표가 들어있으면 개수가 안 맞는 게 정상이다.
+    그래서 문자열 안팎을 실제로 따라가며 본다. 줄이 끝났는데 아직 문자열이
+    닫히지 않았다면 그게 곧 이 버그다.
+    """
+    problems = []
+    for n, line in enumerate(PAGE_TMPL.splitlines(), 1):
+        quote = None          # 지금 열려 있는 따옴표(None 이면 문자열 밖)
+        k = 0
+        while k < len(line):
+            c = line[k]
+            if quote:
+                if c == "\\":
+                    k += 2            # 이스케이프된 문자는 통째로 건너뛴다
+                    continue
+                if c == quote:
+                    quote = None
+            else:
+                if c in ("'", '"'):
+                    quote = c
+                elif c == "/" and k + 1 < len(line) and line[k + 1] == "/":
+                    break             # 여기부터 줄 끝까지 주석
+            k += 1
+        if quote:
+            problems.append((n, quote, line.strip()[:80]))
+    return problems
+
+
 def main():
+    bad = check_template()
+    if bad:
+        print("⚠️  PAGE_TMPL 에 따옴표가 안 맞는 줄이 있다 — "
+              "JS 가 통째로 죽을 수 있다:", flush=True)
+        for n, q, text in bad:
+            print(f"    {n}행 ({q}): {text}", flush=True)
+
     global _dashboard_node
     rclpy.init()
     node = DashboardNode()
