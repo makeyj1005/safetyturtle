@@ -679,12 +679,12 @@ PAGE_TMPL = """<!doctype html>
     <div class="camwrap">
       <div>
         <div class="camlabel">전면 · 웹캠 (진행방향)</div>
-        <img id="camimg" src="/snapshot.jpg" alt="전면 카메라 로딩 중...">
+        <img id="camimg" src="/stream.mjpg" alt="전면 카메라 로딩 중...">
         <div class="note" id="camnote"></div>
       </div>
       <div>
         <div class="camlabel">후면 · CSI (소화기 점검)</div>
-        <img id="camimgrear" src="/snapshot_rear.jpg" alt="후면 카메라 로딩 중...">
+        <img id="camimgrear" src="/stream_rear.mjpg" alt="후면 카메라 로딩 중...">
         <div class="note" id="camnoterear"></div>
       </div>
     </div>
@@ -921,6 +921,16 @@ function refreshStatus() {
       (d.inspect && d.inspect.age_sec >= 0) ? d.inspect.text : '점검 노드 미실행';
     document.getElementById('camnote').textContent =
       d.camera_age_sec >= 0 ? ('영상 ' + d.camera_age_sec.toFixed(1) + '초 전') : '영상 없음';
+    // 서버는 프레임을 받고 있는데 화면만 멈춘 경우(스트림 연결이 끊긴 것)
+    // 다시 붙인다. 서버도 프레임이 없으면 카메라 문제이므로 건드리지 않는다.
+    if (d.camera_age_sec >= 0 && d.camera_age_sec < 2) {
+      const el = document.getElementById('camimg');
+      if (el && !el.naturalWidth) reconnectStream('camimg', '/stream.mjpg');
+    }
+    if (d.camera_rear_age_sec >= 0 && d.camera_rear_age_sec < 3) {
+      const er = document.getElementById('camimgrear');
+      if (er && !er.naturalWidth) reconnectStream('camimgrear', '/stream_rear.mjpg');
+    }
     if (d.ctl) {
       const el = document.getElementById('ctlstat');
       el.textContent = d.ctl.text;
@@ -935,15 +945,12 @@ function refreshStatus() {
   }).catch(() => {});
 }
 
-let camTick = 0;
-function refreshCam() {
-  const t = Date.now();
-  document.getElementById('camimg').src = '/snapshot.jpg?t=' + t;
-  // 후면 CSI 는 원본이 5~8fps 다. 전면과 같은 주기로 당기면 같은 그림을
-  // 두 번 받아 무선 대역만 먹는다.
-  if (++camTick % 2 === 0) {
-    document.getElementById('camimgrear').src = '/snapshot_rear.jpg?t=' + t;
-  }
+// 카메라는 MJPEG 스트림이라 주기 갱신이 필요 없다 — 서버가 새 프레임을
+// 밀어준다. 다만 카메라가 끊겼다 돌아오면 브라우저가 스스로 다시 붙지
+// 않는 경우가 있어, 영상이 오래 멈춘 게 보이면 그때만 다시 연결한다.
+function reconnectStream(id, url) {
+  const el = document.getElementById(id);
+  if (el) el.src = url + '?t=' + Date.now();
 }
 
 function refreshGallery(kind, elId, emptyMsg) {
@@ -1223,8 +1230,7 @@ document.querySelectorAll('.keys button').forEach(b => {
 document.getElementById('stopbtn').addEventListener('click', stopMove);
 
 // ---------------- 주기 갱신 ----------------
-setInterval(refreshCam, 1000);
-setInterval(refreshStatus, 1500);
+setInterval(refreshStatus, 800);
 setInterval(refreshPhotos, 8000);
 setInterval(refreshEvents, 5000);
 setInterval(refreshInspections, 6000);
@@ -1239,9 +1245,61 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass  # 콘솔 도배 방지 — 조용히 서빙한다
 
+    def _send_mjpeg(self, frame_key, at_key):
+        """프레임이 새로 올 때마다 밀어보낸다(multipart/x-mixed-replace).
+
+        [왜 폴링을 버렸나]
+        전에는 브라우저가 1초마다 /snapshot.jpg 를 다시 받았다. 카메라가
+        13fps 로 와도 화면은 1fps 라 뚝뚝 끊겨 보였다. CPU 나 무선 탓이
+        아니라 화면 갱신 주기가 병목이었다.
+        폴링 주기를 100ms 로 줄이는 방법도 있지만 초당 10번씩 새 HTTP
+        요청·헤더·연결이 생긴다. 스트리밍은 연결 하나로 끝나고, 새 프레임이
+        있을 때만 보내므로 낭비도 없다.
+        """
+        boundary = "frameboundary"
+        self.send_response(200)
+        self.send_header("Content-Type",
+                         f"multipart/x-mixed-replace; boundary={boundary}")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.end_headers()
+
+        last_at = 0.0
+        idle_since = time.time()
+        try:
+            while True:
+                with state_lock:
+                    frame = state[frame_key]
+                    at = state[at_key]
+                if frame is not None and at > last_at:
+                    last_at = at
+                    idle_since = time.time()
+                    self.wfile.write(f"--{boundary}\r\n".encode())
+                    self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                    self.wfile.write(
+                        f"Content-Length: {len(frame)}\r\n\r\n".encode())
+                    self.wfile.write(frame)
+                    self.wfile.write(b"\r\n")
+                    self.wfile.flush()
+                else:
+                    # 카메라가 멎었는데 연결만 붙잡고 있으면 스레드가 샌다.
+                    # 60초 동안 새 프레임이 없으면 끊는다 — 브라우저가
+                    # 알아서 다시 붙는다.
+                    if time.time() - idle_since > 60.0:
+                        break
+                # 20ms 마다 확인한다. 카메라가 15fps(66ms)라 충분히 촘촘하고,
+                # 그보다 짧게 돌면 CPU 만 먹는다.
+                time.sleep(0.02)
+        except (BrokenPipeError, ConnectionResetError):
+            pass          # 사용자가 페이지를 닫았다 — 정상 종료다
+
     def do_GET(self):
         if self.path == "/" or self.path.startswith("/index"):
             self._send(200, "text/html; charset=utf-8", PAGE_TMPL.encode("utf-8"))
+        elif self.path.startswith("/stream.mjpg"):
+            self._send_mjpeg("frame", "frame_at")
+        elif self.path.startswith("/stream_rear.mjpg"):
+            self._send_mjpeg("frame_rear", "frame_rear_at")
         elif self.path.startswith("/snapshot.jpg"):
             with state_lock:
                 frame = state["frame"]

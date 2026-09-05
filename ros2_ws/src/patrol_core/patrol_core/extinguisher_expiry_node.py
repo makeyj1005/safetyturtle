@@ -68,10 +68,22 @@ class ExtinguisherExpiryNode(Node):
         self.pub_status = self.create_publisher(String, "/extinguisher/status", qos)
 
         self.last_level = {}     # name -> 마지막으로 기록한 등급
+        self.last_text = ""      # 마지막으로 낸 요약 문구
 
         interval = float(self.get_parameter("check_interval_sec").value)
         self.create_timer(interval, self.check_all)
         self.check_all()         # 시작 직후 1회
+
+        # 판정은 하루 한 번이면 되지만, **알리는 것**은 자주 해야 한다.
+        # 대시보드처럼 나중에 켜지는 구독자는 그 사이에 발행이 없으면
+        # 다음 판정(최대 24시간 뒤)까지 옛 값을 그대로 보여준다.
+        # 실제로 소화기 정보를 고치고 이 노드만 재시작했더니 대시보드가
+        # 11분 넘게 옛 날짜를 띄우고 있었다(2026-09-05).
+        # 날짜 계산을 다시 하지 않고 이미 만든 문구만 다시 낸다.
+        self.declare_parameter("status_period_sec", 5.0)
+        self.create_timer(
+            float(self.get_parameter("status_period_sec").value),
+            self.republish_status)
 
         self.get_logger().info(
             f"소화기 유효기한 감시 시작 — {interval / 3600:.0f}시간마다 점검, "
@@ -120,11 +132,25 @@ class ExtinguisherExpiryNode(Node):
                 self.last_level[name] = level
 
         text = " / ".join(summaries) if summaries else "등록된 소화기 없음"
+        self.last_text = text
         m = String()
         m.data = text
         self.pub_status.publish(m)
         if not bool(self.get_parameter("quiet").value):
             self.get_logger().info(f"점검 결과: {text}")
+
+
+    def republish_status(self):
+        """이미 판정해 둔 문구를 다시 낸다(계산도 로그도 하지 않는다).
+
+        로그까지 같이 내면 5초마다 같은 줄이 쌓여서 정작 중요한 경고가
+        묻힌다. 그래서 발행만 한다.
+        """
+        if not self.last_text:
+            return
+        m = String()
+        m.data = self.last_text
+        self.pub_status.publish(m)
 
 
 def main():
