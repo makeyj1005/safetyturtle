@@ -308,6 +308,19 @@ class ExtinguisherInspectNode(Node):
             return
         self.frame = frame
         self.n_recv += 1
+        # 10초마다 살아있다는 것과 QR 을 몇 번 봤는지 남긴다.
+        # 이게 없어서 '반응이 없다' 가 프레임을 못 받는 건지, QR 이 화면
+        # 밖인지, 판독이 실패하는 건지 구분할 수 없었다(2026-09-05).
+        now_t = time.time()
+        if now_t - getattr(self, '_last_beat', 0.0) >= 10.0:
+            since = self.n_recv - getattr(self, '_beat_recv', 0)
+            self._beat_recv = self.n_recv
+            self._last_beat = now_t
+            if not bool(self.get_parameter('quiet').value):
+                self.get_logger().info(
+                    f'수신 {since}장 ({since/10.0:.1f}fps) — '
+                    f'QR 판독 성공 {getattr(self, "n_qr", 0)}회, '
+                    f'최근 QR={self.last_qr or "없음"}')
 
         # 정렬 중이면 프레임만 갱신하고 빠진다 — align() 이 self.frame 을 읽어
         # 되먹임을 돌리는 중인데, 여기서 또 점검을 시작하면 겹쳐서 로봇이 계속 돈다.
@@ -320,6 +333,8 @@ class ExtinguisherInspectNode(Node):
             return
 
         qr = self.read_qr(frame)
+        if qr:
+            self.n_qr = getattr(self, 'n_qr', 0) + 1
         if qr and qr != self.last_qr:
             self.get_logger().info(f"QR 판독: {qr}")
         self.last_qr = qr

@@ -973,16 +973,10 @@ function refreshStatus() {
       (d.inspect && d.inspect.age_sec >= 0) ? d.inspect.text : '점검 노드 미실행';
     document.getElementById('camnote').textContent =
       d.camera_age_sec >= 0 ? ('영상 ' + d.camera_age_sec.toFixed(1) + '초 전') : '영상 없음';
-    // 서버는 프레임을 받고 있는데 화면만 멈춘 경우(스트림 연결이 끊긴 것)
-    // 다시 붙인다. 서버도 프레임이 없으면 카메라 문제이므로 건드리지 않는다.
-    if (d.camera_age_sec >= 0 && d.camera_age_sec < 2) {
-      const el = document.getElementById('camimg');
-      if (el && !el.naturalWidth) reconnectStream('camimg', '/stream.mjpg');
-    }
-    if (d.camera_rear_age_sec >= 0 && d.camera_rear_age_sec < 3) {
-      const er = document.getElementById('camimgrear');
-      if (er && !er.naturalWidth) reconnectStream('camimgrear', '/stream_rear.mjpg');
-    }
+    // 스트림 재연결은 아래 onerror 가 맡는다.
+    // (naturalWidth 로 판단하던 코드가 있었는데 동작하지 않았다 — 한 장이라도
+    //  받은 뒤에는 연결이 끊겨도 마지막 프레임 크기가 남아 0 이 되지 않는다.
+    //  그래서 '멈췄는데 다시 붙지 않는' 상태가 계속됐다.)
     if (d.ctl) {
       const el = document.getElementById('ctlstat');
       el.textContent = d.ctl.text;
@@ -1004,6 +998,34 @@ function reconnectStream(id, url) {
   const el = document.getElementById(id);
   if (el) el.src = url + '?t=' + Date.now();
 }
+
+// 스트림이 끊기면(대시보드 재시작, 카메라 정지 등) 브라우저가 img 에 error 를
+// 낸다. 그때 다시 붙인다. 서버가 아직 안 떴을 수 있으니 점점 뜸하게 재시도한다
+// — 1초 간격으로 계속 두드리면 재시작 중인 서버에 요청만 쌓인다.
+function watchStream(id, url) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  let wait = 1000;
+  el.addEventListener('error', () => {
+    setTimeout(() => {
+      reconnectStream(id, url);
+      wait = Math.min(wait * 2, 10000);
+    }, wait);
+  });
+  // 다시 붙는 데 성공하면 대기 시간을 되돌린다
+  el.addEventListener('load', () => { wait = 1000; });
+}
+watchStream('camimg', '/stream.mjpg');
+watchStream('camimgrear', '/stream_rear.mjpg');
+
+// 다른 탭에 갔다 오면 브라우저가 스트림을 끊어두는 경우가 있다.
+// 돌아왔을 때 화면이 멈춰 있으면 곤란하므로 한 번 다시 붙인다.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    reconnectStream('camimg', '/stream.mjpg');
+    reconnectStream('camimgrear', '/stream_rear.mjpg');
+  }
+});
 
 function refreshGallery(kind, elId, emptyMsg) {
   fetch('/api/photos?kind=' + kind).then(r => r.json()).then(rows => {

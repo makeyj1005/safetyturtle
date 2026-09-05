@@ -1,0 +1,18 @@
+time,verdict,persons,helmet_ratio,conf,box,head,detector,held,image
+2026-09-05 11:04:51,미착용,1,-0.403,0.55,811-30-1278-713,box,yolo,,/root/vibe/ex1/logs/helmet_0905_104526/110451_bad.jpg
+2026-09-05 11:05:36,미착용,1,-0.780,0.93,724-18-1278-710,box,yolo,Y,/root/vibe/ex1/logs/helmet_0905_104526/110536_bad.jpg
+2026-09-05 11:05:54,미착용,1,-0.609,0.79,472-258-1280-713,box,yolo,,/root/vibe/ex1/logs/helmet_0905_104526/110554_bad.jpg
+2026-09-05 11:06:18,미착용,2,-0.302,0.59,458-364-1279-714,box,yolo,,/root/vibe/ex1/logs/helmet_0905_104526/110618_bad.jpg
+2026-09-05 11:06:23,미착용,1,-0.587,0.94,874-106-1279-710,box,yolo,,/root/vibe/ex1/logs/helmet_0905_104526/110623_bad.jpg
+2026-09-05 11:07:04,미착용,1,-0.496,0.82,888-157-1279-710,box,yolo,Y,/root/vibe/ex1/logs/helmet_0905_104526/110704_bad.jpg
+2026-09-05 11:07:14,미착용,1,-0.476,0.63,908-24-1278-710,box,yolo,Y,/root/vibe/ex1/logs/helmet_0905_104526/110714_bad.jpg
+2026-09-05 11:10:44,미착용,1,-0.583,0.78,830-101-1278-707,box,yolo,,/root/vibe/ex1/logs/helmet_0905_104526/111044_bad.jpg
+2026-09-05 11:11:30,미착용,1,-0.663,0.83,733-73-1279-703,box,yolo,,/root/vibe/ex1/logs/helmet_0905_104526/111130_bad.jpg
+2026-09-05 11:11:35,미착용,1,-0.637,0.58,927-58-1278-710,box,yolo,,/root/vibe/ex1/logs/helmet_0905_104526/111135_bad.jpg
+2026-09-05 11:11:38,미착용,2,-0.433,0.68,918-79-1278-710,box,yolo,Y,/root/vibe/ex1/logs/helmet_0905_104526/111138_bad.jpg
+2026-09-05 11:11:41,미착용,1,-0.463,0.70,919-79-1279-712,box,yolo,Y,/root/vibe/ex1/logs/helmet_0905_104526/111141_bad.jpg
+2026-09-05 11:11:45,미착용,1,-0.413,0.70,918-80-1278-712,box,yolo,Y,/root/vibe/ex1/logs/helmet_0905_104526/111145_bad.jpg
+2026-09-05 11:11:48,미착용,1,-0.556,0.77,910-71-1279-709,box,yolo,Y,/root/vibe/ex1/logs/helmet_0905_104526/111148_bad.jpg
+2026-09-05 11:11:53,미착용,1,-0.852,0.87,371-283-972-715,box,yolo,Y,/root/vibe/ex1/logs/helmet_0905_104526/111153_bad.jpg
+2026-09-05 11:12:31,미착용,1,-0.657,0.88,713-41-1279-706,box,yolo,Y,/root/vibe/ex1/logs/helmet_0905_104526/111231_bad.jpg
+2026-09-05 11:13:24,미착용,2,-0.458,0.83,866-168-1278-707,box,yolo,,/root/vibe/ex1/logs/helmet_0905_104526/111324_bad.jpg
