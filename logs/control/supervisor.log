@@ -1,1 +1,27 @@
 [18:45:55] 감시 시작 — 요청 파일: /home/park/vibe/ex1/logs/control/request
+[20:45:59] 전체 재시작 요청
+[20:46:36] 재시작 실패 — 로그 확인
+32m✓[0m cmd_vel_mux
+  - dashboard (남겨둔다 — 웹페이지가 살아있어야 진행이 보인다)
+  [32m✓[0m fire_node
+  [32m✓[0m restricted_node
+  [32m✓[0m helmet_node
+  [32m✓[0m extinguisher_node
+  [32m✓[0m helmet_rear_node
+  [32m✓[0m extinguisher_inspect_node
+
+[1m== 로봇 노드 정지[0m
+  [32m✓[0m gpio_io_node
+  [32m✓[0m speaker_node
+  [32m✓[0m lcd_node
+  [32m✓[0m webcam_node
+
+bringup 은 남겨둔다(재기동 비용이 크고, 껐다 바로 켜면 OpenCR 이
+'stack smashing' 으로 죽는다). 정말 끄려면:
+  ssh rpi@192.168.0.73 "pkill -9 -f '[r]obot.launch.py'"
+
+[1m== 로봇 접속 확인[0m
+  [31m✗[0m 로봇(rpi@192.168.0.73)에 접속할 수 없다
+     - 로봇 전원이 켜져 있는지 (부팅에 1분쯤 걸린다)
+     - 노트북이 team1 와이파이에 붙어 있는지
+     - IP 가 바뀌었는지 (공유기 192.168.0.1 의 DHCP 목록에서 ros18 확인)

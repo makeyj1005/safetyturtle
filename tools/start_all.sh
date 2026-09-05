@@ -45,9 +45,11 @@ MAP="${MAP:-/home/rpi/vibe/ex1/maps/venue2_map.yaml}"
 #      ros2 topic hz /webcam/image_raw/compressed
 #    /scan 이 흔들리면 fps 나 해상도를 되돌린다.
 # ⚠️ Nav2 자율주행을 켤 때는 원본값(3fps / 640x480 / jpeg50)으로 되돌릴 것.
-# 25 를 요청하면 실제 21fps 정도 나온다(2026-09-05 실측). 15 일 때는 12.5fps.
-# 카메라·USB 한계라 더 올려도 크게 늘지 않는다.
-WEBCAM_FPS="${WEBCAM_FPS:-25.0}"
+# [2026-09-05 정정] 25 로 올렸다가 15 로 되돌렸다. 노트북 CPU 만 보고 올렸는데
+# 정작 인코딩을 하는 파이가 코어 하나를 통째로 먹었다(webcam_node 94%).
+# 파이가 포화되니 프레임이 밀려 화면이 3초쯤 늦게 나왔다. 15 면 파이 50% 로
+# 떨어지고 실측 12.7fps 가 나온다 — 눈으로 부드럽기에 충분하다.
+WEBCAM_FPS="${WEBCAM_FPS:-15.0}"
 WEBCAM_W="${WEBCAM_W:-1280}"
 WEBCAM_H="${WEBCAM_H:-720}"
 WEBCAM_JPEG="${WEBCAM_JPEG:-70}"
