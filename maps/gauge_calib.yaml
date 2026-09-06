@@ -14,14 +14,14 @@ points:
     ref_contrast: 105.0
   소화기1:
     roi:
-    - 659
-    - 65
+    - 772
+    - 61
     - 132
     - 132
-    radius_px: 44.2
+    radius_px: 37.1
     normal_angle: 0.0
     resolution:
     - 1640
     - 1232
-    ref_image: cal_ref2.jpg
-    ref_contrast: 65.0
+    ref_image: gauge_ref_new.jpg
+    ref_contrast: 136.9
