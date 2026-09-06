@@ -11,7 +11,7 @@
 set -u
 
 EX1="$HOME/vibe/ex1"
-ROBOT="rpi@192.168.0.73"
+ROBOT="rpi@192.168.1.207"
 SSH_OPTS=(-o ConnectTimeout=8 -o BatchMode=yes -o StrictHostKeyChecking=accept-new)
 
 hr()  { printf '\n\033[1m%s\033[0m\n' "════ $* ════"; }

@@ -21,7 +21,7 @@
 # 도커·ssh 를 건드릴 수 없어서 이 둘을 나눴다.
 set -u
 
-ROBOT="${ROBOT:-rpi@192.168.0.73}"
+ROBOT="${ROBOT:-rpi@192.168.1.207}"
 EX1="$HOME/vibe/ex1"
 MAP="${MAP:-/home/rpi/vibe/ex1/maps/venue2_map.yaml}"
 
@@ -88,27 +88,25 @@ SSH_OPTS=(-o ConnectTimeout=8 -o BatchMode=yes -o StrictHostKeyChecking=accept-n
 # --ipc=host 가 반드시 필요하다: Fast-RTPS 는 같은 기계 안에서 공유메모리(/dev/shm)로
 # 통신하는데, --network host 는 네트워크 네임스페이스만 공유하고 IPC 는 컨테이너마다
 # 격리된 채로 남는다. 이걸 빼면 "발행은 되는데 구독 쪽에 하나도 안 온다"가 된다.
-# ---------------- Fast-DDS 를 와이파이 인터페이스에만 묶는다
-# [2026-09-05 실측] 도커가 만든 docker0(172.17.0.1) 때문에 발견 멀티캐스트가
-# 엉뚱한 인터페이스로 나가서, 로봇이 노트북 노드를 하나도 발견하지 못했다.
-# 구독자를 발견하지 못하면 발행자가 보낼 곳을 모른다 — 그래서
-# "ros2 topic list 에는 다 보이는데 ros2 topic hz 는 한 장도 안 온다" 가 된다.
-# 네트워크도 ROS 도 멀쩡했다(순수 UDP·멀티캐스트 양방향 정상 확인).
+# ---------------- Fast-DDS 프로파일 (기본값: 안 씀)
+# [2026-09-07 발표장] 어제 만든 인터페이스 화이트리스트 프로파일이 이 망에서는
+# 오히려 통신을 막았다. 프로파일을 빼고 기본 설정으로 하니 전부 정상이다
+# (/battery 20Hz, /scan 5Hz, /webcam 6.3fps).
 #
-# 와이파이 주소는 DHCP 로 바뀌므로 켤 때마다 실제 주소를 찾아 파일을 다시 만든다.
-# (발표 장소에서 IP 가 달라져도 그대로 동작해야 한다)
-WIFI_IF="$(ip -4 -o route get 1.1.1.1 2>/dev/null | grep -o 'dev [^ ]*' | awk '{print $2}')"
-WIFI_IP="$(ip -4 -o addr show "${WIFI_IF:-lo}" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)"
-DDS_XML="$EX1/logs/control/fastdds.xml"
-if [ -n "$WIFI_IP" ] && [ -f "$EX1/tools/fastdds_wifi.xml" ]; then
-    mkdir -p "$(dirname "$DDS_XML")"
-    sed "s/__WIFI_IP__/$WIFI_IP/" "$EX1/tools/fastdds_wifi.xml" > "$DDS_XML"
-    DDS_ENV=(-e "FASTRTPS_DEFAULT_PROFILES_FILE=/root/vibe/ex1/logs/control/fastdds.xml")
-else
-    # 주소를 못 찾으면 프로파일 없이 간다. 여기서 멈추면 유선 등
-    # 다른 환경에서 아예 못 쓰게 된다 — 경고만 하고 진행한다.
-    echo "  ⚠ 와이파이 주소를 못 찾았다 — DDS 인터페이스 고정 없이 진행한다"
-    DDS_ENV=()
+# 어제 이 프로파일이 필요했던 이유는 docker0(172.17.0.1)로 발견 패킷이
+# 새는 것을 막기 위해서였다. 망이 바뀌면 필요 여부도 바뀌므로 기본은 끈다.
+# 필요하면 환경변수로 켤 것:
+#   USE_DDS_PROFILE=1 ./tools/start_all.sh
+DDS_ENV=()
+if [ "${USE_DDS_PROFILE:-0}" = "1" ]; then
+    WIFI_IF="$(ip -4 -o route get 1.1.1.1 2>/dev/null | grep -o 'dev [^ ]*' | awk '{print $2}')"
+    WIFI_IP="$(ip -4 -o addr show "${WIFI_IF:-lo}" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)"
+    if [ -n "$WIFI_IP" ] && [ -f "$EX1/tools/fastdds_wifi.xml" ]; then
+        mkdir -p "$EX1/logs/control"
+        sed "s/__WIFI_IP__/$WIFI_IP/" "$EX1/tools/fastdds_wifi.xml" > "$EX1/logs/control/fastdds.xml"
+        DDS_ENV=(-e "FASTRTPS_DEFAULT_PROFILES_FILE=/root/vibe/ex1/logs/control/fastdds.xml")
+        echo "  DDS 프로파일 사용: $WIFI_IP"
+    fi
 fi
 
 DOCKER_COMMON=(--rm --network host --ipc=host -e ROS_DOMAIN_ID=3

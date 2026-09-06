@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  fastdds_peers.xml — 멀티캐스트 없이 서로를 찾게 한다.
+
+  [왜 필요한가 — 2026-09-07 발표장에서]
+  ROS2(Fast-DDS)는 노드끼리 서로를 찾을 때 멀티캐스트(239.255.0.1)를 쓴다.
+  그런데 이 망은 멀티캐스트를 막는다 — 실측 0/6 통과.
+  순수 UDP 유니캐스트는 5/5 로 멀쩡한데도 그렇다.
+  그러면 노드가 서로를 **발견하지 못해서** 토픽이 하나도 안 흐른다.
+  증상은 "로봇은 발행 중인데 노트북이 한 장도 못 받는" 형태다.
+
+  해결: 상대 IP 를 직접 적어 준다(initialPeers). 멀티캐스트를 안 쓴다.
+
+  [주의] IP 가 바뀌면 이 파일도 다시 만들어야 한다.
+  start_all.sh 가 켤 때마다 실제 주소를 넣어 logs/control/fastdds.xml 을 만든다.
+  __WIFI_IP__ 는 노트북 주소, __ROBOT_IP__ 는 로봇 주소 자리다.
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>wifi_only</transport_id>
+      <type>UDPv4</type>
+      <!-- docker0 같은 엉뚱한 인터페이스로 나가지 않게 묶는다 -->
+      <interfaceWhiteList>
+        <address>__WIFI_IP__</address>
+      </interfaceWhiteList>
+      <!-- 큰 메시지(카메라 영상)를 DDS 가 직접 잘게 나눠 보내게 한다.
+           이걸 안 하면 IP 계층이 조각내는데, 무선에서는 조각 하나만 잃어도
+           프레임 전체가 버려진다. 실제로 작은 토픽(/battery_state)은 20Hz 로
+           멀쩡히 오는데 영상만 한 장도 안 오는 상태였다(2026-09-07 발표장).
+           1200 은 흔한 MTU(1500)에서 헤더를 뺀 안전한 크기다. -->
+      <maxMessageSize>1200</maxMessageSize>
+      <sendBufferSize>1048576</sendBufferSize>
+      <receiveBufferSize>4194304</receiveBufferSize>
+    </transport_descriptor>
+  </transport_descriptors>
+
+  <participant profile_name="peers_participant" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>wifi_only</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+
+      <builtin>
+        <metatrafficUnicastLocatorList>
+          <!-- 내가 발견 메시지를 받을 곳. 포트를 비워 두면 도메인 규칙대로 잡는다 -->
+          <locator><udpv4><address>__WIFI_IP__</address></udpv4></locator>
+        </metatrafficUnicastLocatorList>
+
+        <initialPeersList>
+          <!-- 멀티캐스트 대신 여기 적힌 상대에게 직접 발견 메시지를 보낸다.
+               같은 기계 안의 컨테이너끼리도 찾아야 하므로 자기 자신도 넣는다. -->
+          <locator><udpv4><address>__ROBOT_IP__</address></udpv4></locator>
+          <locator><udpv4><address>__WIFI_IP__</address></udpv4></locator>
+        </initialPeersList>
+      </builtin>
+
+      <!-- 사용자 데이터(카메라 영상 등)를 받을 주소.
+           이걸 안 적으면 큰 메시지가 안 온다 — 작은 토픽(/battery_state 20Hz)은
+           멀쩡히 오는데 영상만 한 장도 안 오는 형태로 나타난다(2026-09-07 실측).
+           발견은 metatraffic, 실제 데이터는 여기로 오기 때문이다. -->
+      <defaultUnicastLocatorList>
+        <locator><udpv4><address>__WIFI_IP__</address></udpv4></locator>
+      </defaultUnicastLocatorList>
+    </rtps>
+  </participant>
+</profiles>
