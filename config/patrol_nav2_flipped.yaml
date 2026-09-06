@@ -158,20 +158,23 @@ controller_server:
       # 시간 안에 요구 이동량을 못 채워 `Failed to make progress` 가 반복됐다.
       # ⚠️ 이 값은 **안전모 판정을 켜고 재측정한 뒤 최종 확정**해야 한다.
       # 0.10 은 2026-08-02 에 실측으로 정한 값이므로 근거 없이 폐기하지 않는다.
-      max_vel_x: 0.15
+      # [2026-09-06] 0.15 -> 0.09. 전압 부족으로 순찰이 끊겨서 낮춘다.
+      # 시연은 천천히 도는 편이 오히려 보기 좋다.
+      max_vel_x: 0.09
       max_vel_y: 0.0
-      max_vel_theta: 1.0
+      max_vel_theta: 0.7   # 회전이 전류를 가장 많이 먹는다
       min_speed_xy: 0.0
-      max_speed_xy: 0.15  # max_vel_x 와 같이 맞춘다
+      max_speed_xy: 0.09  # max_vel_x 와 같이 맞춘다
       min_speed_theta: 0.0
       # Add high threshold velocity for turtlebot 3 issue.
       # https://github.com/ROBOTIS-GIT/turtlebot3_simulations/issues/75
-      acc_lim_x: 2.5
+      # 가속을 낮추면 기동 전류(첨두)가 줄어든다. 여기가 핵심이다.
+      acc_lim_x: 0.8
       acc_lim_y: 0.0
-      acc_lim_theta: 3.2
-      decel_lim_x: -2.5
+      acc_lim_theta: 1.2
+      decel_lim_x: -1.5   # 감속은 전류를 안 먹으니 덜 낮춘다
       decel_lim_y: 0.0
-      decel_lim_theta: -3.2
+      decel_lim_theta: -2.0
       vx_samples: 20
       vy_samples: 0
       vtheta_samples: 40
@@ -365,7 +368,7 @@ recoveries_server:
     simulate_ahead_time: 2.0
     max_rotational_vel: 1.0
     min_rotational_vel: 0.4
-    rotational_acc_lim: 3.2
+    rotational_acc_lim: 1.2
 
 robot_state_publisher:
   ros__parameters:

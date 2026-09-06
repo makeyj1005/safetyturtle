@@ -24,7 +24,7 @@ import numpy as np
 FREE, UNKNOWN, WALL = 254, 205, 0
 
 
-def clean(img):
+def clean(img, keep_inside=False):
     """(정리된 지도, 통계) 를 돌려준다."""
     wall = (img <= 50).astype(np.uint8)
 
@@ -68,6 +68,14 @@ def clean(img):
         if (blob & (outside_grown == 1)).any():
             keep_wall |= blob
 
+    if keep_inside:
+        # 방 테두리 안에 있는 벽은 전부 남긴다 — 소화기 같은 실제 장애물이다.
+        ys, xs = np.where(room)
+        y0, y1, x0, x1 = ys.min(), ys.max(), xs.min(), xs.max()
+        box = np.zeros_like(room)
+        box[y0:y1 + 1, x0:x1 + 1] = True
+        keep_wall = keep_wall | (box & (sealed == 1))
+
     out = np.full_like(img, UNKNOWN)
     out[room] = FREE
     out[keep_wall] = WALL
@@ -86,12 +94,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src")
     ap.add_argument("dst")
+    ap.add_argument("--keep-inside", action="store_true",
+                    help="방 안의 장애물(소화기 등)도 남긴다. "
+                         "이걸 안 주면 안쪽 벽 조각을 잡음으로 보고 지운다 — "
+                         "실제 장애물이 있는데 지우면 전역 경로가 그것을 "
+                         "통과하도록 잡혀 좁은 방에서 길을 못 찾는다(2026-09-06 실측).")
     a = ap.parse_args()
 
     img = cv2.imread(a.src, cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise SystemExit(f"지도를 못 읽었다: {a.src}")
-    out, st = clean(img)
+    out, st = clean(img, keep_inside=a.keep_inside)
     cv2.imwrite(a.dst, out)
 
     res = 0.05

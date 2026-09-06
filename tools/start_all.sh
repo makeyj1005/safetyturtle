@@ -49,9 +49,12 @@ MAP="${MAP:-/home/rpi/vibe/ex1/maps/venue2_map.yaml}"
 # 정작 인코딩을 하는 파이가 코어 하나를 통째로 먹었다(webcam_node 94%).
 # 파이가 포화되니 프레임이 밀려 화면이 3초쯤 늦게 나왔다. 15 면 파이 50% 로
 # 떨어지고 실측 12.7fps 가 나온다 — 눈으로 부드럽기에 충분하다.
-WEBCAM_FPS="${WEBCAM_FPS:-15.0}"
-WEBCAM_W="${WEBCAM_W:-1280}"
-WEBCAM_H="${WEBCAM_H:-720}"
+# [2026-09-06] 전압 부족 대책으로 낮춤. USB 웹캠은 파이 5V 를 가장 많이
+# 먹는 장치 중 하나다(~500mA). 해상도와 fps 를 줄이면 그만큼 여유가 생긴다.
+# 안전모 판정은 사람 상자 안에서 하므로 640x480 으로도 충분히 된다.
+WEBCAM_FPS="${WEBCAM_FPS:-8.0}"
+WEBCAM_W="${WEBCAM_W:-640}"
+WEBCAM_H="${WEBCAM_H:-480}"
 WEBCAM_JPEG="${WEBCAM_JPEG:-70}"
 
 # --- CSI(후면) 화질 ---

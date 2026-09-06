@@ -52,7 +52,7 @@ class CmdVelMux(Node):
         self.declare_parameter("rate", 20.0)
         # 안전 상한. 어떤 입력이 들어와도 이 값을 넘겨 발행하지 않는다.
         # 절대 규칙은 아니지만, 잘못된 노드 하나가 로봇을 폭주시키는 것을 막는다.
-        self.declare_parameter("max_linear", 0.12)
+        self.declare_parameter("max_linear", 0.10)
         self.declare_parameter("max_angular", 1.0)
 
         # --- 가감속 제한 (2026-09-05 추가) ---
@@ -69,8 +69,8 @@ class CmdVelMux(Node):
         #    (11.4V 부근) 전압 여유가 없어 결국 같은 일이 난다. 충전이 우선이다.
         #
         # 단위는 m/s^2, rad/s^2. 0 이하로 주면 제한하지 않는다.
-        self.declare_parameter("max_accel_linear", 0.15)
-        self.declare_parameter("max_accel_angular", 1.5)
+        self.declare_parameter("max_accel_linear", 0.10)
+        self.declare_parameter("max_accel_angular", 1.0)
         # 멈출 때는 더 빨리 줄여도 된다 — 감속은 전류를 끌어가지 않고,
         # 오히려 천천히 멈추면 '안 서네' 하고 놀라 안전에 나쁘다.
         self.declare_parameter("decel_scale", 3.0)
