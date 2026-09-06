@@ -23,6 +23,7 @@ plughw 는 한 프로그램이 장치를 독점하므로, 재생 중에 또 요�
 하는 경우는 부르는 쪽이 alarm_interval_sec 만큼 띄워서 다시 요청하면 된다.
 """
 import os
+import shlex
 import subprocess
 
 import rclpy
@@ -38,8 +39,12 @@ class SpeakerNode(Node):
     def __init__(self):
         super().__init__("speaker_node")
 
-        # I2S 스피커는 card 1 (aplay -l 로 확인). card 0 은 헤드폰잭이라 소리가 안 난다.
-        self.declare_parameter("device", "plughw:1,0")
+        # I2S 스피커(MAX98357A)의 카드 번호는 **재부팅할 때마다 바뀔 수 있다**.
+        # 2026-09-06 에 card 1 -> card 2 로 밀리면서 소리가 통째로 안 났다.
+        # 로그에는 "재생: xxx.mp3" 만 찍혀 정상처럼 보이는데 실제로는 없는
+        # 장치로 내보내고 있었다. 그래서 번호를 박지 않고 이름으로 찾는다.
+        # 빈 문자열이면 자동 탐색, 값을 주면 그대로 쓴다.
+        self.declare_parameter("device", "")
         # mpg123 -f 값. 32768=1배, 65536=2배. 이 앰프는 하드웨어 볼륨조절이 없어서
         # (amixer -c 1 에 컨트롤이 없다) 여기서 소프트 증폭한다.
         # 2026-09-02 실측: 2배가 음질 유지하면서 충분히 크다.
@@ -109,9 +114,18 @@ class SpeakerNode(Node):
             self.status("skipped (busy)")
             return
 
-        dev = str(self.get_parameter("device").value)
+        dev = self.find_device()
         gain = int(self.get_parameter("gain").value)
-        cmd = ["mpg123", "-q", "-a", dev, "-f", str(gain), path]
+        # mpg123 은 디코딩만 시키고 출력은 aplay 가 한다. mpg123 의 alsa 출력
+        # 모듈이 로드에 실패해 jack 으로 넘어가면서 소리가 전혀 안 난 적이 있다.
+        #
+        # -w - 로 **WAV 헤더를 붙여** 보낸다. 그래야 aplay 가 표본율과 채널 수를
+        # 헤더에서 읽어 맞춘다. 형식을 손으로 주면(-f S16_LE -r 44100 -c 2)
+        # 파일이 24000Hz 모노일 때 소리가 괴상해진다 — edge-tts 로 만든 파일이
+        # 실제로 24000Hz 모노다.
+        cmd = ["bash", "-c",
+               f"mpg123 -q -w - -f {gain} {shlex.quote(path)} 2>/dev/null | "
+               f"aplay -q -D {shlex.quote(dev)} -"]
         try:
             self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                                          stderr=subprocess.DEVNULL)
@@ -120,6 +134,29 @@ class SpeakerNode(Node):
         except OSError as e:                                    # noqa: BLE001
             self.get_logger().error(f"재생 실패: {e}")
             self.status(f"error: {e}")
+
+    def find_device(self):
+        """MAX98357A 가 몇 번 카드인지 찾아 plughw:N,0 을 돌려준다."""
+        forced = str(self.get_parameter("device").value).strip()
+        if forced:
+            return forced
+        if getattr(self, "_dev_cache", None):
+            return self._dev_cache
+        try:
+            out = subprocess.run(["aplay", "-l"], capture_output=True,
+                                 text=True, timeout=5).stdout
+        except Exception as e:
+            self.get_logger().error(f"aplay -l 실패: {e}")
+            return "plughw:1,0"
+        for line in out.splitlines():
+            # 예: "card 2: MAX98357A [MAX98357A], device 0: ..."
+            if line.startswith("card ") and "MAX98357A" in line:
+                num = line.split()[1].rstrip(":")
+                self._dev_cache = f"plughw:{num},0"
+                self.get_logger().info(f"스피커 카드 발견: {self._dev_cache}")
+                return self._dev_cache
+        self.get_logger().warn("MAX98357A 를 못 찾았다 — plughw:1,0 으로 시도")
+        return "plughw:1,0"
 
     def status(self, text):
         m = String()
