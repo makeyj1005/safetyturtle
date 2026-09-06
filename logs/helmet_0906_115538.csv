@@ -33,3 +33,9 @@ time,verdict,persons,helmet_ratio,conf,box,head,detector,held,image
 2026-09-06 12:18:27,미착용,1,-0.433,0.93,77-116-250-239,box,yolo,,/root/vibe/ex1/logs/helmet_0906_115538/121827_bad.jpg
 2026-09-06 12:18:34,미착용,1,-0.556,0.93,79-113-252-239,box,yolo,,/root/vibe/ex1/logs/helmet_0906_115538/121834_bad.jpg
 2026-09-06 12:18:37,미착용,1,-0.340,0.92,76-111-253-239,box,yolo,Y,/root/vibe/ex1/logs/helmet_0906_115538/121837_bad.jpg
+2026-09-06 12:18:42,미착용,1,-0.671,0.93,77-112-252-239,box,yolo,Y,/root/vibe/ex1/logs/helmet_0906_115538/121842_bad.jpg
+2026-09-06 12:18:46,미착용,1,-0.453,0.94,78-109-255-239,box,yolo,Y,/root/vibe/ex1/logs/helmet_0906_115538/121846_bad.jpg
+2026-09-06 12:18:56,미착용,1,-0.751,0.94,175-45-319-239,box,yolo,,/root/vibe/ex1/logs/helmet_0906_115538/121856_bad.jpg
+2026-09-06 12:21:45,미착용,1,-0.307,0.83,0-137-79-239,box,yolo,,/root/vibe/ex1/logs/helmet_0906_115538/122145_bad.jpg
+2026-09-06 12:27:40,미착용,1,-0.697,0.89,27-107-209-239,box,yolo,Y,/root/vibe/ex1/logs/helmet_0906_115538/122740_bad.jpg
+2026-09-06 12:27:46,미착용,1,-0.651,0.93,21-122-185-239,box,yolo,,/root/vibe/ex1/logs/helmet_0906_115538/122746_bad.jpg
