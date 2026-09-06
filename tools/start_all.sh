@@ -241,6 +241,10 @@ for n in "${ROBOT_NODES[@]}"; do
     fi
 done
 
+# [2026-09-06] sound:=false -> true 로 바꿨다.
+# false 면 부저가 안 울리고 음성만 나간다(speak 는 /speaker/play 로 따로 나가서
+# 소리가 나긴 하므로 "부저가 왜 안 울리지" 를 알아채기 어렵다).
+# 시연에서는 음성과 부저가 함께 울려야 한다.
 # ---------------------------------------------------------------- 노트북 컨테이너
 run_node() {   # run_node <컨테이너이름> <gpu|cpu> <ros2 명령...>
     local name="$1" kind="$2"; shift 2
@@ -276,11 +280,11 @@ fi
 run_node dashboard cpu "python3 -u /root/vibe/ex1/tools/dashboard_server.py"
 
 run_node fire_node cpu \
-    "ros2 run patrol_core fire_node --ros-args -p use_nav:=false -p sound:=false"
+    "ros2 run patrol_core fire_node --ros-args -p use_nav:=false -p sound:=true"
 
 # 사람 검출은 GPU(YOLO)가 훨씬 빠르다 — CPU MobileNet-SSD 는 46% 를 먹었다.
 run_node restricted_node gpu \
-    "ros2 run patrol_core restricted_node --ros-args -p detector:=yolo -p sound:=false"
+    "ros2 run patrol_core restricted_node --ros-args -p detector:=yolo -p sound:=true"
 
 # manage_camera:=false 가 중요하다: true 면 helmet_node 가 ssh 로 로봇 웹캠을
 # 띄우려 하는데, 컨테이너에 ssh 키가 없어 실패한다. 웹캠은 위에서 이미 띄웠다.
@@ -292,7 +296,7 @@ run_node restricted_node gpu \
 run_node helmet_node gpu \
     "ros2 run patrol_core helmet_node --ros-args -p detector:=yolo \
      -p method:=yolo -p yolo_device:=cuda:0 \
-     -p manage_camera:=false -p sound:=false -p hold:=false"
+     -p manage_camera:=false -p sound:=true -p hold:=false"
 
 run_node extinguisher_node cpu "ros2 run patrol_core extinguisher_expiry_node"
 
@@ -308,7 +312,7 @@ if [ "$WITH_REAR" = "1" ]; then
         "ros2 run patrol_core helmet_node --ros-args -r __node:=helmet_node_rear \
          -p topic:=/csi/image_raw/compressed -p detector:=yolo \
          -p method:=yolo -p yolo_device:=cuda:0 \
-         -p manage_camera:=false -p sound:=false -p hold:=false \
+         -p manage_camera:=false -p sound:=true -p hold:=false \
          -p status_topic:=/helmet_rear/status -p evidence_prefix:=helmet_rear \
          -p db_node_name:=helmet_node_rear"
 
