@@ -1,0 +1,2 @@
+time,verdict,persons,helmet_ratio,conf,box,head,detector,held,image
+2026-09-06 12:07:19,미착용,1,-0.814,0.90,90-35-292-239,box,yolo,,/root/vibe/ex1/logs/helmet_0906_115538/120719_bad.jpg
