@@ -52,9 +52,9 @@ MAP="${MAP:-/home/rpi/vibe/ex1/maps/venue2_map.yaml}"
 # [2026-09-06] 전압 부족 대책으로 낮춤. USB 웹캠은 파이 5V 를 가장 많이
 # 먹는 장치 중 하나다(~500mA). 해상도와 fps 를 줄이면 그만큼 여유가 생긴다.
 # 안전모 판정은 사람 상자 안에서 하므로 640x480 으로도 충분히 된다.
-WEBCAM_FPS="${WEBCAM_FPS:-8.0}"
-WEBCAM_W="${WEBCAM_W:-640}"
-WEBCAM_H="${WEBCAM_H:-480}"
+WEBCAM_FPS="${WEBCAM_FPS:-5.0}"
+WEBCAM_W="${WEBCAM_W:-320}"
+WEBCAM_H="${WEBCAM_H:-240}"
 WEBCAM_JPEG="${WEBCAM_JPEG:-70}"
 
 # --- CSI(후면) 화질 ---
@@ -188,8 +188,26 @@ else
 fi
 
 # ---------------------------------------------------------------- 로봇: 센서·스피커·LCD·웹캠
-say "로봇 노드 (센서·스피커·LCD·웹캠)"
+#
+# [2026-09-06] 하나씩 간격을 두고 올린다.
+# 여러 노드를 한꺼번에 띄우면 카메라·라이다·GPIO 가 동시에 초기화되면서
+# 순간 전류가 튀고, 그때 파이의 와이파이(SDIO)가 흔들려 로봇이 통째로
+# 네트워크에서 사라지는 일이 반복됐다. 온도 33도, 전압 정상인 상태에서도
+# 났으므로 과열이나 전원 용량 문제만은 아니다.
+# 간격을 두면 시동이 조금 느려지지만, 한 번에 확실히 올라오는 편이 낫다.
+NODE_GAP="${NODE_GAP:-4}"          # 노드 사이 간격(초)
+
+# 로봇이 아직 붙어 있는지 확인한다. 중간에 끊기면 남은 노드를 올려봐야
+# 소용없고, 어디서 끊겼는지 알아야 다음에 원인을 좁힐 수 있다.
+robot_alive() { ssh "${SSH_OPTS[@]}" "$ROBOT" true >/dev/null 2>&1; }
+
+say "로봇 노드 (센서·스피커·LCD·웹캠) — ${NODE_GAP}초 간격으로 하나씩"
 for n in "${ROBOT_NODES[@]}"; do
+    if ! robot_alive; then
+        bad "로봇이 끊겼다 ($n 올리기 직전)"
+        echo "     여기까지는 올라갔다. 전원을 껐다 켜고 다시 실행할 것."
+        break
+    fi
     if ssh "${SSH_OPTS[@]}" "$ROBOT" "pgrep -f '[${n:0:1}]${n:1}\.py' >/dev/null"; then
         ok "$n (이미 실행 중)"
     else
@@ -203,6 +221,8 @@ for n in "${ROBOT_NODES[@]}"; do
             ( setsid nohup python3 -u ~/launch/$n.py $args > ~/$n.log 2>&1 < /dev/null & )" \
             >/dev/null 2>&1
         ok "$n${args:+ (${WEBCAM_W}x${WEBCAM_H} @${WEBCAM_FPS}fps jpeg${WEBCAM_JPEG})}"
+        # 다음 노드로 넘어가기 전에 전류가 가라앉을 시간을 준다.
+        sleep "$NODE_GAP"
     fi
 done
 
