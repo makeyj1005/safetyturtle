@@ -23,6 +23,7 @@ plughw 는 한 프로그램이 장치를 독점하므로, 재생 중에 또 요�
 하는 경우는 부르는 쪽이 alarm_interval_sec 만큼 띄워서 다시 요청하면 된다.
 """
 import os
+import tempfile
 import shlex
 import subprocess
 
@@ -116,16 +117,22 @@ class SpeakerNode(Node):
 
         dev = self.find_device()
         gain = int(self.get_parameter("gain").value)
-        # mpg123 은 디코딩만 시키고 출력은 aplay 가 한다. mpg123 의 alsa 출력
-        # 모듈이 로드에 실패해 jack 으로 넘어가면서 소리가 전혀 안 난 적이 있다.
+        # [2026-09-06] 재생 방식을 세 번 고쳤다. 기록해 둔다.
+        #  ① mpg123 -a plughw:N,0  -> alsa 출력 모듈 로드 실패, jack 으로
+        #     넘어가 소리가 전혀 안 났다.
+        #  ② mpg123 | aplay (파이프) -> aplay 가 0.02초 만에 끝난다.
+        #     "Playing WAVE" 까지 찍고 즉시 종료해서 정상처럼 보이는데
+        #     실제로는 "통통" 하는 소리만 났다.
+        #  ③ **wav 파일로 뽑아 두고 aplay 로 재생** -> 8초짜리가 10초 걸린다.
+        #     즉 제대로 재생된다. 파이프 대신 파일을 쓰는 이유다.
         #
-        # -w - 로 **WAV 헤더를 붙여** 보낸다. 그래야 aplay 가 표본율과 채널 수를
-        # 헤더에서 읽어 맞춘다. 형식을 손으로 주면(-f S16_LE -r 44100 -c 2)
-        # 파일이 24000Hz 모노일 때 소리가 괴상해진다 — edge-tts 로 만든 파일이
-        # 실제로 24000Hz 모노다.
+        # 48000Hz 스테레오로 맞춰 둔다. 원본은 24000Hz 모노인데(edge-tts),
+        # I2S 앰프가 그 형식을 제대로 못 받아 소리가 깨졌다.
+        wav = os.path.join(tempfile.gettempdir(), "speaker_play.wav")
         cmd = ["bash", "-c",
-               f"mpg123 -q -w - -f {gain} {shlex.quote(path)} 2>/dev/null | "
-               f"aplay -q -D {shlex.quote(dev)} -"]
+               f"mpg123 -q -w {shlex.quote(wav)} -r 48000 --stereo "
+               f"-f {gain} {shlex.quote(path)} 2>/dev/null && "
+               f"aplay -q -D {shlex.quote(dev)} {shlex.quote(wav)}"]
         try:
             self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                                          stderr=subprocess.DEVNULL)
