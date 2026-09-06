@@ -511,7 +511,7 @@ PAGE_TMPL = """<!doctype html>
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>순찰 로봇 관제</title>
 <style>
   * { box-sizing: border-box; }
@@ -617,6 +617,35 @@ PAGE_TMPL = """<!doctype html>
              color: #fff; border: none; border-radius: 7px; font-weight: 700; cursor: pointer; }
   .note { font-size: 11px; color: #8b949e; text-align: center; margin-top: 8px; }
 
+  /* ---------- 휴대폰 ---------- */
+  /* 손가락으로 누르는 버튼은 최소 44px 은 되어야 정확히 눌린다.
+     또 버튼을 꾹 누르는 동안 브라우저가 화면을 스크롤하거나 글자를
+     선택해버리면 로봇이 제멋대로 서므로 그것도 막는다. */
+  .keys button, #stopbtn {
+    touch-action: none;              /* 누른 채 끌어도 화면이 안 밀린다 */
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  @media (max-width: 820px) {
+    body { font-size: 15px; }
+    .grid { grid-template-columns: 1fr; padding: 10px; gap: 10px; }
+    .camwrap { grid-template-columns: 1fr; }
+    /* 조작판을 크게. 폰에서 이게 가장 많이 쓰인다 */
+    .keys { grid-template-columns: repeat(3, 84px);
+            grid-template-rows: repeat(2, 72px); gap: 10px; }
+    .keys button { font-size: 30px; }
+    #stopbtn { padding: 14px 34px; font-size: 17px; margin-top: 10px; }
+    #alertzone { grid-template-columns: 1fr 1fr; }
+    .modebtn { padding: 12px 6px; font-size: 13px; }
+    /* 헤더 버튼이 줄바꿈되어 겹치지 않게 */
+    .hdrright { flex-wrap: wrap; justify-content: flex-end; }
+    h1 { font-size: 17px; }
+  }
+  /* 아주 좁은 화면(세로 폰)에서는 경고판도 한 줄씩 */
+  @media (max-width: 520px) {
+    #alertzone { grid-template-columns: 1fr; }
+  }
+
   /* ---------- 증거 사진 ---------- */
   .gallery { display: grid; gap: 10px;
              grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
@@ -707,7 +736,11 @@ PAGE_TMPL = """<!doctype html>
       </div>
       <div>
         <div class="camlabel">후면 · CSI (소화기 점검)</div>
-        <img id="camimgrear" src="/stream_rear.mjpg" alt="후면 카메라 로딩 중...">
+        <!-- 후면은 스트림이 아니라 주기적으로 한 장씩 받는다.
+             크롬의 동시 연결 6개 제한 때문이다 — 스트림 두 개가 상시
+             2개를 물고 있으면 새로고침이 쌓일 때 연결이 말라 페이지가
+             아예 안 뜬다. 후면은 원본이 5fps 라 1초 간격이면 충분하다. -->
+        <img id="camimgrear" src="/snapshot_rear.jpg" alt="후면 카메라 로딩 중...">
         <div class="note" id="camnoterear"></div>
       </div>
     </div>
@@ -1016,14 +1049,24 @@ function watchStream(id, url) {
   el.addEventListener('load', () => { wait = 1000; });
 }
 watchStream('camimg', '/stream.mjpg');
-watchStream('camimgrear', '/stream_rear.mjpg');
+// 서버가 스트림을 90초에 한 번 끊는다(연결이 쌓이는 것을 막으려고).
+// 그런데 **정상 종료는 error 가 아니라서** 위의 재연결이 안 걸리고
+// 화면이 그대로 멈춘다. 그래서 서버가 끊기 전에 우리가 먼저 다시 붙는다.
+// 80초: 서버의 90초보다 짧아야 끊기는 순간을 안 만난다.
+setInterval(() => {
+  if (!document.hidden) reconnectStream('camimg', '/stream.mjpg');
+}, 80000);
+// 후면은 스트림이 아니므로 감시 대상이 아니다. 대신 1초마다 새로 받는다.
+setInterval(() => {
+  const e = document.getElementById('camimgrear');
+  if (e && !document.hidden) e.src = '/snapshot_rear.jpg?t=' + Date.now();
+}, 1000);
 
 // 다른 탭에 갔다 오면 브라우저가 스트림을 끊어두는 경우가 있다.
 // 돌아왔을 때 화면이 멈춰 있으면 곤란하므로 한 번 다시 붙인다.
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
     reconnectStream('camimg', '/stream.mjpg');
-    reconnectStream('camimgrear', '/stream_rear.mjpg');
   }
 });
 
@@ -1292,14 +1335,35 @@ document.addEventListener('keyup', e => {
   }
 });
 window.addEventListener('blur', stopMove);
+// 폰에서 전화가 오거나 홈으로 나가면 blur 가 안 올 때가 있다.
+// 그대로 두면 로봇이 계속 굴러가므로 화면이 가려지는 것도 정지 신호로 쓴다.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopMove();
+});
+window.addEventListener('pagehide', stopMove);
 
-document.getElementById('kf').addEventListener('mousedown', () => startMove(-0.10, 0, 'kf'));
-document.getElementById('ks').addEventListener('mousedown', () => startMove(0.10, 0, 'ks'));
-document.getElementById('kl').addEventListener('mousedown', () => startMove(0, 0.6, 'kl'));
-document.getElementById('kr').addEventListener('mousedown', () => startMove(0, -0.6, 'kr'));
-document.querySelectorAll('.keys button').forEach(b => {
-  b.addEventListener('mouseup', stopMove);
-  b.addEventListener('mouseleave', stopMove);
+// 마우스와 손가락을 함께 받는다.
+// pointer 이벤트 하나로 둘 다 처리된다 — mousedown 만 달아두면 폰에서는
+// 눌러도 반응이 없거나 300ms 씩 늦게 먹는다.
+// 부호를 바꿀 일이 생기면 이 표만 고치면 된다(KEYMAP 과 같은 값이어야 한다).
+const PADMAP = {
+  kf: [-0.10, 0], ks: [0.10, 0], kl: [0, 0.6], kr: [0, -0.6],
+};
+Object.keys(PADMAP).forEach(id => {
+  const b = document.getElementById(id);
+  if (!b) return;
+  b.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    // 손가락이 버튼 밖으로 나가도 이 버튼이 계속 이벤트를 받게 붙잡는다.
+    // 안 붙잡으면 살짝 미끄러졌을 때 pointerup 을 놓쳐 로봇이 계속 간다.
+    if (b.setPointerCapture) { try { b.setPointerCapture(e.pointerId); } catch (_) {} }
+    const m = PADMAP[id];
+    startMove(m[0], m[1], id);
+  });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev =>
+    b.addEventListener(ev, e => { e.preventDefault(); stopMove(); }));
+  // 길게 누르면 뜨는 복사/선택 메뉴가 조작을 끊는 것을 막는다
+  b.addEventListener('contextmenu', e => e.preventDefault());
 });
 document.getElementById('stopbtn').addEventListener('click', stopMove);
 
@@ -1308,7 +1372,11 @@ setInterval(refreshStatus, 800);
 setInterval(refreshPhotos, 8000);
 setInterval(refreshEvents, 5000);
 setInterval(refreshInspections, 6000);
-refreshCam(); refreshStatus(); refreshPhotos(); refreshEvents(); refreshInspections();
+// 첫 화면을 바로 채운다. 카메라는 MJPEG 스트림이라 <img> 가 알아서 받으므로
+// 여기서 부를 것이 없다(예전 refreshCam 은 폴링 방식이라 있었는데, 스트림으로
+// 바꾸면서 함수를 지웠다. 그런데 이 호출을 남겨둬서 ReferenceError 가 나고
+// **뒤따르는 초기화가 전부 실행되지 않아 페이지가 백지로 보였다** — 2026-09-06).
+refreshStatus(); refreshPhotos(); refreshEvents(); refreshInspections();
 </script>
 </body>
 </html>
@@ -1339,9 +1407,21 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
         last_at = 0.0
-        idle_since = time.time()
+        started = time.time()
+        idle_since = started
+        # 스트림 한 개의 수명. 시간이 되면 끊고, 브라우저가 다시 붙는다.
+        #
+        # [왜 필요한가 — 2026-09-06]
+        # 크롬은 한 사이트에 동시 연결을 6개까지만 연다. MJPEG 스트림은
+        # 연결을 끝없이 붙잡으므로 페이지 하나가 2개를 상시 점유한다.
+        # 새로고침을 해도 이전 연결이 곧바로 정리되지 않아서, 몇 번 새로고침하면
+        # 6개가 다 차고 **HTML 조차 받지 못해 페이지가 백지로 뜬다**
+        # (서버는 멀쩡한데 브라우저만 못 붙는다 — 다른 브라우저로 열면 잘 된다).
+        # 주기적으로 끊어주면 죽은 연결이 쌓이지 않는다. 화면은 img 의
+        # error 처리가 곧바로 다시 붙여서 끊긴 티가 거의 안 난다.
+        max_life = 90.0
         try:
-            while True:
+            while time.time() - started < max_life:
                 with state_lock:
                     frame = state[frame_key]
                     at = state[at_key]
